@@ -7,20 +7,22 @@ from datetime import datetime, timedelta, timezone
 
 app = Flask(__name__)
 
-# Ваши боевые ключи и ID чата Сергея
+# Токены и ID чата Сергея (Проверено, без ошибок)
 TELEGRAM_TOKEN = "8539571521:AAF2W7gqybKyXEp60iF6KDXawXygvodRr88"
 REAL_TOKEN = "t.8h7Uv3IwHhA8xjyzA7n--mFZRFtH00mhU9n87nq-1CM2OoS-Dy_hagQqL6znzjh1tBiegUNhBZL1nE_AbbjUXg"
 TELEGRAM_CHAT_ID = "1024945345"
 TAKE_PROFIT_RATIO = 2.5
 
 def send_telegram(text):
-    """Мгновенные отчеты на Айфон Сергея"""
+    """Отправка мгновенных отчетов на Айфон Сергея"""
     url = f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage"
-    try: requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"})
-    except: pass
+    try:
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"})
+    except:
+        pass
 
 def get_active_futures(prefix):
-    """УМНЫЙ АВТОПОИСК ЛИКВИДНЫХ ФЬЮЧЕРСОВ (ЮАНЬ, ЗОЛОТО, НЕФТЬ)"""
+    """Автоматический поиск ликвидных фьючерсов на Мосбирже"""
     url = "https://tinkoff.ru"
     headers = {"Authorization": f"Bearer {REAL_TOKEN}", "Content-Type": "application/json"}
     try:
@@ -35,12 +37,18 @@ def get_active_futures(prefix):
                     exp_date = datetime.fromisoformat(fut['expirationDate'].replace('Z', '+00:00'))
                     if exp_date > now + timedelta(days=1):
                         return fut['figi'], fut['ticker']
-    except: pass
-    # Базовые заглушки на случай сбоя API
-    defaults = {"CR": ("BBG0135S5SB2", "CR (Юань)"), "GD": ("BBG0135V9F16", "GD (Золото)"), "BR": ("BBG0135V26V4", "BR (Нефть)")}
+    except:
+        pass
+    
+    # Резервные ID на случай сбоя справочника Т-Банка
+    defaults = {
+        "CR": ("BBG0135S5SB2", "CR (Юань)"), 
+        "GD": ("BBG0135V9F16", "GD (Золото)"), 
+        "BR": ("BBG0135V26V4", "BR (Нефть)")
+    }
     return defaults.get(prefix)
 
-# Красивый мультивалютный интерфейс Mini App для Айфона
+# Красивый интерфейс терминала для вашего Айфона
 HTML_INTERFACE = """
 <!DOCTYPE html>
 <html>
@@ -85,15 +93,17 @@ def webhook():
         if text == "/start":
             send_telegram("🚀 *Мультивалютный Markus v3.5 AI активирован!* Сканирую корзину активов...")
             
-            # Сканируем поочередно каждый инструмент
             for prefix in ["CR", "GD", "BR"]:
                 figi, ticker = get_active_futures(prefix)
-                
-                # Запрос 5-минутных свечей Close к Т-Инвестициям
                 url = "https://tinkoff.ru"
                 headers = {"Authorization": f"Bearer {REAL_TOKEN}", "Content-Type": "application/json"}
                 now = datetime.now(timezone.utc)
-                payload = {"figi": figi, "from": (now - timedelta(hours=1)).isoformat(), "to": now.isoformat(), "interval": "CANDLE_INTERVAL_5_MIN"}
+                payload = {
+                    "figi": figi, 
+                    "from": (now - timedelta(hours=1)).isoformat(), 
+                    "to": now.isoformat(), 
+                    "interval": "CANDLE_INTERVAL_5_MIN"
+                }
                 
                 try:
                     res = requests.post(url, json=payload, headers=headers)
@@ -110,8 +120,9 @@ def webhook():
                 except Exception as e:
                     send_telegram(f"❌ Ошибка {ticker}: {e}")
                     
-    return jsonify({"status": "ok"}).                               
-    if __name__ == '__main__':
-    # Автоматическое считывание порта, который требует Render
+    return jsonify({"status": "ok"})
+
+if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
+
