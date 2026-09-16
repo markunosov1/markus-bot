@@ -110,9 +110,8 @@ def webhook():
                 except Exception as e:
                     send_telegram(f"❌ Ошибка {ticker}: {e}")
                     
-    return jsonify({"status": "ok"})
-
-if __if __name__ == '__main__':
+    return jsonify({"status": "ok"}).                               
+    if __name__ == '__main__':
     # Автоматическое считывание порта, который требует Render
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
