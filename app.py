@@ -11,14 +11,6 @@ TELEGRAM_TOKEN = "8539571521:AAF2W7gqybKyXEp60iF6KDXawXygvodRr88"
 REAL_TOKEN = "t.8h7Uv3IwHhA8xjyzA7n--mFZRFtH00mhU9n87nq-1CM2OoS-Dy_hagQqL6znzjh1tBiegUNhBZL1nE_AbbjUXg"
 TELEGRAM_CHAT_ID = "1706240751"
 
-def send_telegram(text):
-    url = f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    try:
-        requests.post(url, json=payload, timeout=5)
-    except:
-        pass
-
 def get_active_futures(prefix):
     url = "https://tinkoff.ru"
     headers = {"Authorization": f"Bearer {REAL_TOKEN}", "Content-Type": "application/json"}
@@ -43,8 +35,8 @@ def get_active_futures(prefix):
     }
     return defaults.get(prefix)
 
-def scan_markets():
-    send_telegram("🚀 *Мультивалютный Markus v3.5 AI запущен!*\nНачинаю проверку свечей Close на Мосбирже...")
+def get_market_prices():
+    prices = {}
     for prefix in ["CR", "GD", "BR"]:
         figi, ticker = get_active_futures(prefix)
         url = "https://tinkoff.ru"
@@ -57,58 +49,62 @@ def scan_markets():
             "interval": "CANDLE_INTERVAL_5_MIN"
         }
         try:
-            time.sleep(0.5)
+            time.sleep(0.3)
             res = requests.post(url, json=payload, headers=headers, timeout=5)
             if res.status_code == 200:
                 candles = res.json().get('candles', [])
                 if candles:
                     price = float(candles[-1]['close']['units']) + float(candles[-1]['close']['nano']) / 1e9
-                    send_telegram(f"⏳ *Пульс {ticker}:* Свечи Close проверены. Паттерны стабильны. Цена: `{price}`")
+                    prices[ticker] = f"{price}"
                 else:
-                    send_telegram(f"⚠️ *{ticker}:* График пуст, жду открытия пятиминутки.")
+                    prices[ticker] = "Нет свечей"
             else:
-                send_telegram(f"❌ *{ticker}:* Ошибка биржи (Код {res.status_code})")
+                prices[ticker] = f"Ошибка {res.status_code}"
         except:
-            send_telegram(f"❌ *{ticker}:* Не удалось достучаться до серверов брокера.")
-
-HTML_INTERFACE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Markus Multi-Trade</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1c1c1e; color: white; text-align: center; padding: 20px; margin: 0; }
-        .card { background: #2c2c2e; margin: 15px auto; padding: 15px; border-radius: 16px; width: 85%; text-align: left; }
-        .status { font-size: 22px; margin: 20px 0; color: #34c759; font-weight: bold; }
-        p { margin: 6px 0; color: #aeaeb2; font-size: 14px; }
-        .ticker { color: #34c759; font-weight: bold; }
-    </style>
-</head>
-<body>
-    <h2>🤖 MARKUS v3.5 MULTI-AI</h2>
-    <div class="status">🟢 КОРЗИНА АКТИВОВ ЗАПУЩЕНА</div>
-    <div class="card">
-        <p>• ТРЕНД 1: <b>CNY (Юань)</b> ➡️ <span class="ticker">Автовыбор активен</span></p>
-        <p>• ТРЕНД 2: <b>GOLD (Золото)</b> ➡️ <span class="ticker">Автовыбор активен</span></p>
-        <p>• ТРЕНД 3: <b>BRENT (Нефть)</b> ➡️ <span class="ticker">Автовыбор активен</span></p>
-    </div>
-</body>
-</html>
-"""
+            prices[ticker] = "Ошибка сети"
+    return prices
 
 @app.route('/')
 def index():
-    return HTML_INTERFACE
+    data = get_market_prices()
+    cny_p = data.get("CR (Юань)", "Загрузка...")
+    gold_p = data.get("GD (Золото)", "Загрузка...")
+    brent_p = data.get("BR (Нефть)", "Загрузка...")
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Markus Terminal</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1c1c1e; color: white; text-align: center; padding: 20px; margin: 0; }}
+            .card {{ background: #2c2c2e; margin: 15px auto; padding: 15px; border-radius: 16px; width: 85%; text-align: left; }}
+            .status {{ font-size: 22px; margin: 20px 0; color: #34c759; font-weight: bold; }}
+            p {{ margin: 8px 0; color: #aeaeb2; font-size: 15px; }}
+            .price {{ color: #34c759; font-weight: bold; float: right; }}
+            .btn {{ background: #2c2c2e; border: 1px solid #34c759; color: #34c759; padding: 10px; border-radius: 8px; cursor: pointer; margin-top: 10px; }}
+        </style>
+    </head>
+    <body>
+        <h2>🤖 MARKUS TERMINAL v3.6</h2>
+        <div class="status">🟢 МОНИТОРИНГ РЫНКА АКТИВЕН</div>
+        
+        <div class="card">
+            <p>• Юань (CNY): <span class="price">{cny_p} руб.</span></p>
+            <p>• Золото (GOLD): <span class="price">${gold_p}</span></p>
+            <p>• Нефть (BRENT): <span class="price">${brent_p}</span></p>
+        </div>
+        
+        <button class="btn" onclick="window.location.reload();">🔄 ОБНОВИТЬ ЦЕНЫ</button>
+    </body>
+    </html>
+    """
+    return html
 
 @app.route('/telegram-webhook', methods=['POST'])
 def webhook():
-    update = request.get_json()
-    if "message" in update:
-        text = update["message"].get("text", "")
-        if text == "/start":
-            scan_markets()
     return jsonify({"status": "ok"})
 
 if __name__ == '__main__':
