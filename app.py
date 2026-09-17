@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = "8539571521:AAF2W7gqybKyXEp60iF6KDXawXygvodRr88"
-REAL_TOKEN = "t.8h7Uv3IwHhA8xjyzA7n--mFZRFtH00mhU9n87nq-1CM2OoS-Dy_hagQqL6znzjh1tBiegUNhBZL1nE_AbbjUXg"
+REAL_TOKEN = "t.LjJnhIhErtp7NikKcKnYPn2x5fLfd-LguHRfjFXJz3PCLAIBr1k4uo_rxJlorPimprQaZaHEZOGp246HAhXAXA"
 TELEGRAM_CHAT_ID = "1706240751"
 
 def get_active_futures(prefix):
