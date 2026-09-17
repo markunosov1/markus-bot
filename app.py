@@ -10,15 +10,20 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = "8539571521:AAF2W7gqybKyXEp60iF6KDXawXygvodRr88"
 REAL_TOKEN = "t.LjJnhIhErtp7NikKcKnYPn2x5fLfd-LguHRfjFXJz3PCLAIBr1k4uo_rxJlorPimprQaZaHEZOGp246HAhXAXA"
 TELEGRAM_CHAT_ID = "1024945345"
-
 def get_active_futures(prefix):
-    url = "https://tinkoff.ru"
-    headers = {"Authorization": f"Bearer {REAL_TOKEN}"}
+    # Меняем старый сайт tinkoff.ru на актуальный адрес T-Invest API
+    url = "https://tbank.ru"
+    headers = {
+        "Authorization": f"Bearer {REAL_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
     try:
+        # Отправляем правильный запрос на новый адрес
         res = requests.post(url, json={"instrumentStatus": "INSTRUMENT_STATUS_BASE"}, headers=headers, timeout=5)
         if res.status_code == 200:
             instruments = res.json().get('instruments', [])
+            # Дальше идет ваша оригинальная логика фильтрации и поиска фьючерса
             filtered = [i for i in instruments if i.get('ticker', '').startswith(prefix) and i.get('buyAvailableFlag')]
             if filtered:
                 filtered.sort(key=lambda x: x.get('expirationDate', ''))
@@ -27,6 +32,13 @@ def get_active_futures(prefix):
                     exp_date = datetime.fromisoformat(fut['expirationDate'].replace('Z', '+00:00'))
                     if exp_date > now + timedelta(days=1):
                         return fut['figi'], fut['ticker']
+        else:
+            print(f"Ошибка API Т-Банка: {res.status_code} - {res.text}")
+            return None, None
+    except Exception as e:
+        print(f"Ошибка сети при запросе фьючерсов: {e}")
+        return None, None
+
     except:
         pass
     defaults = {
