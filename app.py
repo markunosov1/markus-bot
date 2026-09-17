@@ -52,30 +52,47 @@ def get_market_prices():
     prices = {}
     for prefix in ["CR", "GD", "BR"]:
         figi, ticker = get_active_futures(prefix)
-        url = "https://tinkoff.ru"
-        headers = {"Authorization": f"Bearer {REAL_TOKEN}", "Content-Type": "application/json"}
+        if not figi:
+            prices[prefix] = "Ошибка"
+            continue
+            
+        # Заменяем старый сайт на правильный адрес API Т-Банка для получения свечей
+        url = "https://tbank.ru"
+        headers = {
+            "Authorization": f"Bearer {REAL_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
         now = datetime.now(timezone.utc)
         payload = {
             "figi": figi,
-            "from": (now - timedelta(hours=2)).isoformat(),
+            "from": (now - timedelta(hours=24)).isoformat(),
             "to": now.isoformat(),
-            "interval": "CANDLE_INTERVAL_5_MIN"
+            "interval": "CANDLE_INTERVAL_1_MIN"
         }
+        
         try:
-            time.sleep(0.3)
             res = requests.post(url, json=payload, headers=headers, timeout=5)
             if res.status_code == 200:
                 candles = res.json().get('candles', [])
                 if candles:
-                    price = float(candles[-1]['close']['units']) + float(candles[-1]['close']['nano']) / 1e9
-                    prices[ticker] = f"{price}"
+                    # Получаем последнюю цену закрытия из свечи
+                    close_price = candles[-1].get('close', {})
+                    # В API Т-Банка цена передается объектом (units и nano), переводим в обычное число
+                    units = int(close_price.get('units', 0))
+                    nano = int(close_price.get('nano', 0))
+                    price = units + nano / 1e9
+                    prices[prefix] = f"{price:.2f}"
                 else:
-                    prices[ticker] = "Нет свечей"
+                    prices[prefix] = "Нет данных"
             else:
-                prices[ticker] = f"Ошибка {res.status_code}"
-        except:
-            prices[ticker] = "Ошибка сети"
+                prices[prefix] = "Ошибка API"
+        except Exception as e:
+            print(f"Ошибка получения цены для {prefix}: {e}")
+            prices[prefix] = "Ошибка сети"
+            
     return prices
+
 
 @app.route('/')
 def index():
