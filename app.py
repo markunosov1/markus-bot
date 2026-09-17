@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = "8539571521:AAF2W7gqybKyXEp60iF6KDXawXygvodRr88"
-REAL_TOKEN = "t.LjJnhIhErtp7NikKcKnYPn2x5fLfd-LguHRfjFXJz3PCLAIBr1k4uo_rxJlorPimprQaZaHEZOGp246HAhXAXA"
+REAL_TOKEN = "t.qdyaXxPhBqsGOC4WT4DCk93fefA3TU9ZrcfyxfJHGW04tFFgjdcxZYsJ2n-3qqYfcdaEu-WMIvAIxSxRNVtOGQ"
 TELEGRAM_CHAT_ID = "1024945345"
 def get_active_futures(prefix):
     # Меняем старый сайт tinkoff.ru на актуальный адрес T-Invest API
