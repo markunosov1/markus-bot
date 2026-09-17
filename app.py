@@ -13,7 +13,8 @@ TELEGRAM_CHAT_ID = "1024945345"
 
 def get_active_futures(prefix):
     url = "https://tinkoff.ru"
-    headers = {"Authorization": f"Bearer {REAL_TOKEN}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {REAL_TOKEN}"}
+
     try:
         res = requests.post(url, json={"instrumentStatus": "INSTRUMENT_STATUS_BASE"}, headers=headers, timeout=5)
         if res.status_code == 200:
