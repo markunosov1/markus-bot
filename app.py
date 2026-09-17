@@ -78,7 +78,7 @@ def get_market_prices():
                 if candles:
                     # Получаем последнюю цену закрытия из свечи
                     close_price = candles[-1].get('close', {})
-                    # В API Т-Банка цена передается объектом (units и nano), переводим в обычное число
+                    # Переводим специфический формат API Т-Банка (units и nano) в обычное число
                     units = int(close_price.get('units', 0))
                     nano = int(close_price.get('nano', 0))
                     price = units + nano / 1e9
@@ -92,6 +92,7 @@ def get_market_prices():
             prices[prefix] = "Ошибка сети"
             
     return prices
+
 
 
 @app.route('/')
