@@ -127,6 +127,43 @@ def get_market_prices():
         except Exception:
             prices[prefix] = "Ошибка сети"
     return prices
+    def place_market_order(figi, direction, lots_quantity):
+    """
+    Отправляет реальную рыночную заявку на биржу через T-Invest API.
+    direction: "ORDER_DIRECTION_BUY" (покупка) или "ORDER_DIRECTION_SELL" (продажа)
+    """
+    if not LIVE_TRADING:
+        log.info(f"[TEST MODE] Сигнал {direction} по инструменту FIGI {figi} пропущен (выключены реальные торги).")
+        return None
+
+    # Официальный адрес Т-Банка для выставления торговых поручений
+    url = f"{API_URL}/tinkoff.public.invest.api.orders.v1.OrdersService/PostOrder"
+    
+    # Генерируем уникальный ключ операции, чтобы Т-Банк не продублировал сделку при сбое сети
+    order_id = f"markus_{int(time.time())}_{figi[:4]}"
+    
+    payload = {
+        "figi": figi,
+        "quantity": int(lots_quantity),
+        "direction": direction,
+        "accountId": ACCOUNT_ID,
+        "orderType": "ORDER_TYPE_MARKET",
+        "orderId": order_id
+    }
+    
+    try:
+        res = requests.post(url, json=payload, headers=headers(), timeout=15)
+        if res.status_code == 200:
+            order_data = res.json()
+            log.info(f" Сделка успешно совершена! ID ордера: {order_data.get('orderId')}")
+            return order_data
+        else:
+            log.error(f" Ошибка выставления заявки: {res.status_code} - {res.text}")
+            return None
+    except Exception as e:
+        log.error(f" Критическая ошибка сети при отправке ордера: {e}")
+        return None
+
 
 # ============================================================
 # FLASK WEB INTERFACE
