@@ -244,5 +244,20 @@ def home():
 def health():
     return jsonify({"status": "ok", "bot_running": True})
 
+# Функция, которая будет крутиться в фоне и постоянно опрашивать Т-Банк
+def background_worker():
+    log.info("Фоновый робот успешно запущен и связывается с Т-Банком...")
+    while True:
+        try:
+            get_market_prices()
+            log.info(f"Данные обновлены. Текущая цена Si: {BOT_STATUS['last_price']}")
+        except Exception as e:
+            log.error(f"Ошибка в фоновом потоке: {e}")
+        time.sleep(CHECK_INTERVAL)
+
+# Запускаем фоновый поток при старте сервера
+monitor_thread = threading.Thread(target=background_worker, daemon=True)
+monitor_thread.start()
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
