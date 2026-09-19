@@ -5,14 +5,12 @@ import logging
 import requests
 from datetime import datetime, timedelta, timezone
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, render_template_string
+app = Flask(__name__)
 
-from t_tech.invest import (
-    Client,
-    CandleInterval,
-    OrderDirection,
-    OrderType,
-)
+
+
+
 
 
 # ============================================================
