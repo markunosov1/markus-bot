@@ -127,6 +127,7 @@ def get_market_prices():
         except Exception:
             prices[prefix] = "Ошибка сети"
     return prices
+    
     def place_market_order(figi, direction, lots_quantity):
     """
     Отправляет реальную рыночную заявку на биржу через T-Invest API.
