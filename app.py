@@ -283,12 +283,27 @@ def get_all_futures():
 # ПОИСК АКТИВНОГО ФЬЮЧЕРСА
 # ============================================================
 
+from datetime import datetime, timezone
+
+# Словарь для перевода "человеческих" префиксов в реальные коды тикеров Мосбиржи
+FUTURES_MAPPING = {
+    "CNY": "CR",      # Юань
+    "BRENT": "BR",    # Нефть Brent
+    "GOLD": "GD",     # Золото (также обрабатывается отдельно ниже)
+    "USD": "SI",      # Доллар
+    "EUR": "ED",      # Евро
+}
+
 def find_active_future(prefix):
 
     log.info(
         "Ищу фьючерс: %s",
         prefix
     )
+
+    prefix_upper = prefix.upper()
+    # Получаем биржевой префикс из словаря. Если его там нет — используем исходный
+    search_prefix = FUTURES_MAPPING.get(prefix_upper, prefix_upper)
 
     # --------------------------------------------------------
     # Сначала пробуем официальный FindInstrument
@@ -317,10 +332,13 @@ def find_active_future(prefix):
                     )
                 ).upper()
 
-                if not ticker.startswith(
-                    prefix.upper()
-                ):
-                    continue
+                # Умная проверка тикера с учетом особенностей GOLD и префиксов
+                if prefix_upper == "GOLD":
+                    if not (ticker.startswith("GD") or ticker.startswith("GOLD")):
+                        continue
+                else:
+                    if not ticker.startswith(search_prefix):
+                        continue
 
                 # Проверяем доступность API
                 if (
@@ -419,10 +437,13 @@ def find_active_future(prefix):
             )
         ).upper()
 
-        if not ticker.startswith(
-            prefix.upper()
-        ):
-            continue
+        # Умная проверка тикера для резервного списка
+        if prefix_upper == "GOLD":
+            if not (ticker.startswith("GD") or ticker.startswith("GOLD")):
+                continue
+        else:
+            if not ticker.startswith(search_prefix):
+                continue
 
         if (
             instrument.get(
@@ -532,38 +553,15 @@ def get_last_price(instrument):
         "ticker"
     )
 
-    class_code = instrument.get(
-        "classCode"
-    ) or instrument.get(
-        "class_code"
-    )
-
-
-    # Основной вариант — UID
-    instrument_id = uid
-
-    # Если UID отсутствует — FIGI
-    if not instrument_id:
-
-        instrument_id = figi
-
-    # Если нет ни UID, ни FIGI,
-    # используем ticker_class_code
-    if (
-        not instrument_id
-        and ticker
-        and class_code
-    ):
-
-        instrument_id = (
-            f"{ticker}_{class_code}"
-        )
+    # Основной вариант — UID, запасной — FIGI.
+    # Конструкция ticker_class_code удалена, так как метод GetLastPrices её не поддерживает.
+    instrument_id = uid or figi
 
     if not instrument_id:
 
         raise RuntimeError(
             f"У инструмента {ticker} "
-            "нет UID/FIGI/class_code."
+            "нет UID или FIGI. Запрос цены невозможен."
         )
 
 
@@ -610,6 +608,7 @@ def get_last_price(instrument):
     )
 
     return price
+
 
 
 # ============================================================
