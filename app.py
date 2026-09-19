@@ -58,7 +58,8 @@ BASE_TICKER = "Si"
 # Таймфрейм
 # ------------------------------------------------------------
 
-TIMEFRAME = CandleInterval.CANDLE_INTERVAL_5_MIN
+TIMEFRAME = "CANDLE_INTERVAL_5_MIN"
+
 
 
 # ------------------------------------------------------------
