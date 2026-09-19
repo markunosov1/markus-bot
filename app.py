@@ -1,875 +1,862 @@
 import os
+import time
+import threading
+import logging
 import requests
-import pandas as pd
 from datetime import datetime, timedelta, timezone
+
+from flask import Flask, jsonify
+
+from t_tech.invest import (
+    Client,
+    CandleInterval,
+    OrderDirection,
+    OrderType,
+)
+
 
 # ============================================================
 # НАСТРОЙКИ
 # ============================================================
 
-T_BANK_TOKEN = os.getenv("T_BANK_TOKEN")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Render может использовать любое из этих названий.
+T_BANK_TOKEN = (
+    os.getenv("T_BANK_TOKEN")
+    or os.getenv("T_INVEST_TOKEN")
+    or os.getenv("INVEST_TOKEN")
+)
+
+ACCOUNT_ID = (
+    os.getenv("T_BANK_ACCOUNT_ID")
+    or os.getenv("T_INVEST_ACCOUNT_ID")
+    or os.getenv("ACCOUNT_ID")
+)
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-API_URL = "https://invest-public-api.tbank.ru/rest"
 
-# Что исследуем
-INTERVAL = "CANDLE_INTERVAL_15_MIN"
+# ------------------------------------------------------------
+# ВАЖНО
+#
+# false = бот только анализирует и присылает сигналы
+# true  = бот реально отправляет заявки брокеру
+# ------------------------------------------------------------
 
-# Период истории
-DAYS_BACK = 180
-
-# Минимальное сильное движение
-STRONG_MOVE_PCT = 0.8
-
-# Сколько последовательных экстремумов требуется
-REQUIRED_POINTS = 3
-
-# Цель и стоп
-TAKE_PROFIT_PCT = 1.0
-STOP_LOSS_PCT = 0.5
-
-# Размер окна для поиска локальных экстремумов
-PIVOT_WINDOW = 2
+LIVE_TRADING = (
+    os.getenv("LIVE_TRADING", "false").lower()
+    == "true"
+)
 
 
-# ============================================================
-# T-BANK API
-# ============================================================
+# ------------------------------------------------------------
+# Инструмент
+# ------------------------------------------------------------
 
-def headers():
-    if not T_BANK_TOKEN:
-        raise RuntimeError(
-            "Не задан T_BANK_TOKEN. "
-            "Добавь токен в переменную окружения."
-        )
-
-    return {
-        "Authorization": f"Bearer {T_BANK_TOKEN}",
-        "Content-Type": "application/json"
-    }
+BASE_TICKER = "Si"
 
 
-def get_futures():
-    """
-    Получаем список доступных фьючерсов.
-    """
+# ------------------------------------------------------------
+# Таймфрейм
+# ------------------------------------------------------------
 
-    url = (
-        API_URL
-        + "/tinkoff.public.invest.api.contract.v1."
-          "InstrumentsService/Futures"
-    )
-
-    payload = {
-        "instrumentStatus": "INSTRUMENT_STATUS_BASE"
-    }
-
-    response = requests.post(
-        url,
-        json=payload,
-        headers=headers(),
-        timeout=20
-    )
-
-    response.raise_for_status()
-
-    return response.json().get("instruments", [])
+TIMEFRAME = CandleInterval.CANDLE_INTERVAL_5_MIN
 
 
-def find_cny_future():
-    """
-    Ищем фьючерс на юань.
+# ------------------------------------------------------------
+# Количество свечей
+# ------------------------------------------------------------
 
-    Не зашиваем FIGI вручную:
-    выбираем актуальный контракт по списку
-    фьючерсов и дате экспирации.
-    """
+CANDLES_COUNT = 300
 
-    futures = get_futures()
 
-    candidates = []
+# ------------------------------------------------------------
+# Swing
+# ------------------------------------------------------------
 
-    now = datetime.now(timezone.utc)
+SWING_WINDOW = 3
 
-    for future in futures:
 
-        ticker = future.get("ticker", "")
+# ------------------------------------------------------------
+# Минимальное движение между первой
+# и третьей точкой
+# ------------------------------------------------------------
 
-        # В зависимости от текущего обозначения API
-        # ищем CNY/CR.
-        if not (
-            ticker.upper().startswith("CR")
-            or "CNY" in ticker.upper()
-        ):
-            continue
+MIN_MOVE_PERCENT = 0.15
 
-        expiration = future.get("expirationDate")
 
-        if not expiration:
-            continue
+# ------------------------------------------------------------
+# Размер позиции
+# ------------------------------------------------------------
 
-        try:
-            expiration_dt = datetime.fromisoformat(
-                expiration.replace("Z", "+00:00")
-            )
-        except ValueError:
-            continue
+LOTS = int(
+    os.getenv("LOTS", "1")
+)
 
-        if expiration_dt <= now:
-            continue
 
-        candidates.append(
-            (expiration_dt, future)
-        )
+# ------------------------------------------------------------
+# Интервал проверки
+# ------------------------------------------------------------
 
-    if not candidates:
-        raise RuntimeError(
-            "Актуальный фьючерс на юань не найден."
-        )
-
-    candidates.sort(key=lambda x: x[0])
-
-    return candidates[0][1]
+CHECK_INTERVAL = int(
+    os.getenv("CHECK_INTERVAL", "30")
+)
 
 
 # ============================================================
-# ИСТОРИЧЕСКИЕ СВЕЧИ
+# LOGGING
 # ============================================================
 
-def get_candles(instrument_id, start, end):
+logging.basicConfig(
+    level=logging.INFO,
+    format=(
+        "%(asctime)s | "
+        "%(levelname)s | "
+        "%(message)s"
+    ),
+)
 
-    url = (
-        API_URL
-        + "/tinkoff.public.invest.api.contract.v1."
-          "MarketDataService/GetCandles"
-    )
-
-    payload = {
-        "from": start.isoformat(),
-        "to": end.isoformat(),
-        "interval": INTERVAL,
-        "instrumentId": instrument_id
-    }
-
-    response = requests.post(
-        url,
-        json=payload,
-        headers=headers(),
-        timeout=30
-    )
-
-    response.raise_for_status()
-
-    return response.json().get("candles", [])
-
-
-def quotation_to_float(value):
-    """
-    T-Bank возвращает цену в формате:
-
-    {
-        "units": "...",
-        "nano": "..."
-    }
-    """
-
-    if not value:
-        return None
-
-    units = int(value.get("units", 0))
-    nano = int(value.get("nano", 0))
-
-    return units + nano / 1_000_000_000
-
-
-def load_history(instrument_id):
-
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=DAYS_BACK)
-
-    candles = get_candles(
-        instrument_id,
-        start,
-        end
-    )
-
-    rows = []
-
-    for candle in candles:
-
-        open_price = quotation_to_float(
-            candle.get("open")
-        )
-
-        high_price = quotation_to_float(
-            candle.get("high")
-        )
-
-        low_price = quotation_to_float(
-            candle.get("low")
-        )
-
-        close_price = quotation_to_float(
-            candle.get("close")
-        )
-
-        if None in (
-            open_price,
-            high_price,
-            low_price,
-            close_price
-        ):
-            continue
-
-        rows.append({
-            "time": candle.get("time"),
-            "open": open_price,
-            "high": high_price,
-            "low": low_price,
-            "close": close_price
-        })
-
-    df = pd.DataFrame(rows)
-
-    if df.empty:
-        raise RuntimeError(
-            "Исторические свечи не получены."
-        )
-
-    df["time"] = pd.to_datetime(df["time"])
-
-    df = df.sort_values("time")
-    df = df.drop_duplicates("time")
-
-    df = df.reset_index(drop=True)
-
-    return df
+log = logging.getLogger("TRADING_BOT")
 
 
 # ============================================================
-# ПОИСК ЛОКАЛЬНЫХ ЭКСТРЕМУМОВ
+# FLASK
 # ============================================================
 
-def find_pivots(df):
-
-    highs = []
-    lows = []
-
-    w = PIVOT_WINDOW
-
-    for i in range(w, len(df) - w):
-
-        current_high = df.loc[i, "high"]
-        current_low = df.loc[i, "low"]
-
-        left_highs = df.loc[
-            i - w:i + w,
-            "high"
-        ]
-
-        left_lows = df.loc[
-            i - w:i + w,
-            "low"
-        ]
-
-        if current_high == left_highs.max():
-            highs.append(i)
-
-        if current_low == left_lows.min():
-            lows.append(i)
-
-    return highs, lows
-
-
-# ============================================================
-# ПРОВЕРКА SHORT-ПАТТЕРНА
-# ============================================================
-
-def find_short_signals(df, highs, lows):
-
-    signals = []
-
-    for h in range(len(highs)):
-
-        first_high_index = highs[h]
-
-        # Ищем сильное падение после первоначального максимума
-        following_lows = [
-            x for x in lows
-            if x > first_high_index
-        ]
-
-        if not following_lows:
-            continue
-
-        first_low_index = following_lows[0]
-
-        first_high = df.loc[
-            first_high_index, "high"
-        ]
-
-        first_low = df.loc[
-            first_low_index, "low"
-        ]
-
-        fall_pct = (
-            (first_high - first_low)
-            / first_high
-            * 100
-        )
-
-        if fall_pct < STRONG_MOVE_PCT:
-            continue
-
-        # Теперь ищем последовательные максимумы
-        sequence = []
-
-        for candidate in highs:
-
-            if candidate <= first_low_index:
-                continue
-
-            price = df.loc[
-                candidate,
-                "high"
-            ]
-
-            if not sequence:
-                sequence.append(candidate)
-                continue
-
-            previous_price = df.loc[
-                sequence[-1],
-                "high"
-            ]
-
-            if price > previous_price:
-
-                sequence.append(candidate)
-
-            else:
-
-                # Последовательность сломалась
-                sequence = [candidate]
-
-            if len(sequence) >= REQUIRED_POINTS:
-
-                signal_index = candidate
-
-                signals.append({
-                    "type": "SHORT",
-                    "index": signal_index,
-                    "time": df.loc[
-                        signal_index,
-                        "time"
-                    ],
-                    "entry": df.loc[
-                        signal_index,
-                        "close"
-                    ],
-                    "points": len(sequence)
-                })
-
-                break
-
-    return signals
-
-
-# ============================================================
-# ПРОВЕРКА LONG-ПАТТЕРНА
-# ============================================================
-
-def find_long_signals(df, highs, lows):
-
-    signals = []
-
-    for l in range(len(lows)):
-
-        first_low_index = lows[l]
-
-        following_highs = [
-            x for x in highs
-            if x > first_low_index
-        ]
-
-        if not following_highs:
-            continue
-
-        first_high_index = following_highs[0]
-
-        first_low = df.loc[
-            first_low_index,
-            "low"
-        ]
-
-        first_high = df.loc[
-            first_high_index,
-            "high"
-        ]
-
-        rise_pct = (
-            (first_high - first_low)
-            / first_low
-            * 100
-        )
-
-        if rise_pct < STRONG_MOVE_PCT:
-            continue
-
-        sequence = []
-
-        for candidate in lows:
-
-            if candidate <= first_high_index:
-                continue
-
-            price = df.loc[
-                candidate,
-                "low"
-            ]
-
-            if not sequence:
-
-                sequence.append(candidate)
-                continue
-
-            previous_price = df.loc[
-                sequence[-1],
-                "low"
-            ]
-
-            if price < previous_price:
-
-                sequence.append(candidate)
-
-            else:
-
-                sequence = [candidate]
-
-            if len(sequence) >= REQUIRED_POINTS:
-
-                signal_index = candidate
-
-                signals.append({
-                    "type": "LONG",
-                    "index": signal_index,
-                    "time": df.loc[
-                        signal_index,
-                        "time"
-                    ],
-                    "entry": df.loc[
-                        signal_index,
-                        "close"
-                    ],
-                    "points": len(sequence)
-                })
-
-                break
-
-    return signals
-
-
-# ============================================================
-# БЭКТЕСТ
-# ============================================================
-
-def test_trade(df, signal):
-
-    entry_index = signal["index"]
-    entry = signal["entry"]
-
-    if signal["type"] == "SHORT":
-
-        take_profit = (
-            entry
-            * (1 - TAKE_PROFIT_PCT / 100)
-        )
-
-        stop_loss = (
-            entry
-            * (1 + STOP_LOSS_PCT / 100)
-        )
-
-    else:
-
-        take_profit = (
-            entry
-            * (1 + TAKE_PROFIT_PCT / 100)
-        )
-
-        stop_loss = (
-            entry
-            * (1 - STOP_LOSS_PCT / 100)
-        )
-
-    for i in range(
-        entry_index + 1,
-        len(df)
-    ):
-
-        high = df.loc[i, "high"]
-        low = df.loc[i, "low"]
-
-        if signal["type"] == "SHORT":
-
-            # В одной свече могли быть задеты
-            # и TP, и SL. Консервативно считаем
-            # сначала стоп.
-            if high >= stop_loss:
-                return "LOSS", i
-
-            if low <= take_profit:
-                return "WIN", i
-
-        else:
-
-            if low <= stop_loss:
-                return "LOSS", i
-
-            if high >= take_profit:
-                return "WIN", i
-
-    return "OPEN", None
-
-
-def run_backtest(df, signals):
-
-    results = []
-
-    for signal in signals:
-
-        result, exit_index = test_trade(
-            df,
-            signal
-        )
-
-        results.append({
-            **signal,
-            "result": result,
-            "exit_index": exit_index
-        })
-
-    return pd.DataFrame(results)
-
-
-# ============================================================
-# СТАТИСТИКА
-# ============================================================
-
-def print_statistics(results):
-
-    if results.empty:
-
-        print("\nСигналов не найдено.")
-        return
-
-    completed = results[
-        results["result"].isin(
-            ["WIN", "LOSS"]
-        )
-    ]
-
-    wins = len(
-        completed[
-            completed["result"] == "WIN"
-        ]
-    )
-
-    losses = len(
-        completed[
-            completed["result"] == "LOSS"
-        ]
-    )
-
-    total = wins + losses
-
-    print("\n==============================")
-    print("       MARKUS BACKTEST")
-    print("==============================")
-
-    print(
-        f"Всего сигналов: {len(results)}"
-    )
-
-    print(
-        f"Завершённых сделок: {total}"
-    )
-
-    print(
-        f"WIN: {wins}"
-    )
-
-    print(
-        f"LOSS: {losses}"
-    )
-
-    if total > 0:
-
-        winrate = (
-            wins / total * 100
-        )
-
-        print(
-            f"\nПРОХОДИМОСТЬ: {winrate:.2f}%"
-        )
-
-    print(
-        "\nLONG:"
-    )
-
-    long_results = completed[
-        completed["type"] == "LONG"
-    ]
-
-    if not long_results.empty:
-
-        long_winrate = (
-            (
-                long_results["result"] == "WIN"
-            ).mean()
-            * 100
-        )
-
-        print(
-            f"{long_winrate:.2f}%"
-        )
-
-    print(
-        "\nSHORT:"
-    )
-
-    short_results = completed[
-        completed["type"] == "SHORT"
-    ]
-
-    if not short_results.empty:
-
-        short_winrate = (
-            (
-                short_results["result"] == "WIN"
-            ).mean()
-            * 100
-        )
-
-        print(
-            f"{short_winrate:.2f}%"
-        )
+app = Flask(__name__)
+
+
+BOT_STATUS = {
+    "running": False,
+    "instrument": None,
+    "last_price": None,
+    "last_signal": None,
+    "last_signal_time": None,
+    "live_trading": LIVE_TRADING,
+}
+
+
+@app.route("/")
+def home():
+
+    return jsonify({
+        "status": "online",
+        "bot": "Eva Trading Bot",
+        "trading": LIVE_TRADING,
+        "instrument": BOT_STATUS["instrument"],
+        "last_price": BOT_STATUS["last_price"],
+        "last_signal": BOT_STATUS["last_signal"],
+        "last_signal_time": BOT_STATUS[
+            "last_signal_time"
+        ],
+    })
+
+
+@app.route("/health")
+def health():
+
+    return jsonify({
+        "status": "ok",
+        "bot_running": BOT_STATUS["running"],
+    })
 
 
 # ============================================================
 # TELEGRAM
 # ============================================================
 
-def send_telegram(message):
+def telegram(message):
 
-    if not TELEGRAM_TOKEN:
-        print(
-            "\nTelegram token не установлен."
-        )
+    if not TELEGRAM_BOT_TOKEN:
         return
 
     if not TELEGRAM_CHAT_ID:
-        print(
-            "\nTelegram chat ID не установлен."
-        )
         return
-
-    url = (
-        "https://api.telegram.org/bot"
-        f"{TELEGRAM_TOKEN}/sendMessage"
-    )
-
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message
-    }
 
     try:
 
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=15
+        url = (
+            "https://api.telegram.org/bot"
+            f"{TELEGRAM_BOT_TOKEN}"
+            "/sendMessage"
         )
 
-        response.raise_for_status()
+        requests.post(
+            url,
+            data={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": message,
+            },
+            timeout=10,
+        )
 
     except Exception as e:
 
-        print(
-            f"Ошибка Telegram: {e}"
+        log.error(
+            "Telegram error: %s",
+            e,
         )
 
 
 # ============================================================
-# MAIN
+# ПРОВЕРКА ENV
 # ============================================================
 
-def main():
+def check_environment():
 
-    print(
-        "\n🤖 MARKUS AI"
-    )
-
-    print(
-        "Поиск фьючерса на юань..."
-    )
-
-    future = find_cny_future()
-
-    ticker = future.get(
-        "ticker",
-        "UNKNOWN"
-    )
-
-    figi = future.get(
-        "figi"
-    )
-
-    uid = future.get(
-        "uid"
-    )
-
-    instrument_id = uid or figi
-
-    if not instrument_id:
+    if not T_BANK_TOKEN:
 
         raise RuntimeError(
-            "У фьючерса нет UID/FIGI."
+            "Не найден токен T-Bank.\n"
+            "В Render добавь:\n"
+            "T_BANK_TOKEN"
         )
 
-    print(
-        f"Фьючерс: {ticker}"
+    log.info(
+        "T-Bank token найден"
     )
 
-    print(
-        f"ID: {instrument_id}"
+    if ACCOUNT_ID:
+
+        log.info(
+            "ACCOUNT_ID задан вручную"
+        )
+
+    else:
+
+        log.info(
+            "ACCOUNT_ID не задан."
+            " Бот попробует определить его сам."
+        )
+
+    if TELEGRAM_BOT_TOKEN:
+
+        log.info(
+            "Telegram BOT TOKEN найден"
+        )
+
+    if TELEGRAM_CHAT_ID:
+
+        log.info(
+            "Telegram CHAT ID найден"
+        )
+
+
+# ============================================================
+# ПОЛУЧЕНИЕ ACCOUNT ID
+# ============================================================
+
+def get_account_id(client):
+
+    if ACCOUNT_ID:
+
+        return ACCOUNT_ID
+
+    response = client.users.get_accounts()
+
+    if not response.accounts:
+
+        raise RuntimeError(
+            "У токена нет доступных брокерских счетов."
+        )
+
+    # Берем первый доступный счет
+
+    account = response.accounts[0]
+
+    log.info(
+        "Найден счет: %s",
+        account.id,
     )
 
-    print(
-        "\nЗагружаю историю..."
-    )
+    return account.id
 
-    df = load_history(
-        instrument_id
-    )
 
-    print(
-        f"Получено свечей: {len(df)}"
-    )
+# ============================================================
+# ПОИСК SI
+# ============================================================
 
-    print(
-        "\nИщу экстремумы..."
-    )
+def find_si_future(client):
 
-    highs, lows = find_pivots(df)
+    response = client.instruments.futures()
 
-    print(
-        f"Максимумов: {len(highs)}"
-    )
+    candidates = []
 
-    print(
-        f"Минимумов: {len(lows)}"
-    )
+    for instrument in response.instruments:
 
-    print(
-        "\nИщу SHORT..."
-    )
+        ticker = (
+            instrument.ticker
+            or ""
+        )
 
-    short_signals = find_short_signals(
-        df,
-        highs,
-        lows
-    )
+        if not ticker.upper().startswith(
+            BASE_TICKER.upper()
+        ):
+            continue
 
-    print(
-        f"SHORT сигналов: "
-        f"{len(short_signals)}"
-    )
+        if not getattr(
+            instrument,
+            "api_trade_available_flag",
+            True,
+        ):
+            continue
 
-    print(
-        "\nИщу LONG..."
-    )
+        candidates.append(
+            instrument
+        )
 
-    long_signals = find_long_signals(
-        df,
-        highs,
-        lows
-    )
+    if not candidates:
 
-    print(
-        f"LONG сигналов: "
-        f"{len(long_signals)}"
-    )
+        raise RuntimeError(
+            "Фьючерс Si не найден."
+        )
 
-    signals = (
-        short_signals
-        + long_signals
-    )
+    # Пытаемся выбрать ближайший срок экспирации
 
-    signals.sort(
-        key=lambda x: x["index"]
-    )
+    def expiration_key(x):
 
-    results = run_backtest(
-        df,
-        signals
-    )
+        expiration = getattr(
+            x,
+            "expiration_date",
+            None,
+        )
 
-    print_statistics(
-        results
-    )
+        if expiration is None:
 
-    # Сохраняем полный результат
-    results.to_csv(
-        "markus_backtest_results.csv",
-        index=False
-    )
-
-    print(
-        "\nРезультаты сохранены:"
-        " markus_backtest_results.csv"
-    )
-
-    if not results.empty:
-
-        completed = results[
-            results["result"].isin(
-                ["WIN", "LOSS"]
+            return datetime.max.replace(
+                tzinfo=timezone.utc
             )
+
+        return expiration
+
+    candidates.sort(
+        key=expiration_key
+    )
+
+    future = candidates[0]
+
+    log.info(
+        "Выбран фьючерс: %s | %s | UID=%s",
+        future.ticker,
+        future.name,
+        future.uid,
+    )
+
+    return future
+
+
+# ============================================================
+# ПОЛУЧЕНИЕ СВЕЧЕЙ
+# ============================================================
+
+def get_candles(
+    client,
+    instrument_uid,
+):
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+    start = now - timedelta(
+        days=7
+    )
+
+    response = (
+        client.market_data.get_candles(
+            instrument_id=instrument_uid,
+            from_=start,
+            to=now,
+            interval=TIMEFRAME,
+        )
+    )
+
+    result = []
+
+    for candle in response.candles:
+
+        result.append({
+            "time": candle.time,
+            "open": float(candle.open),
+            "high": float(candle.high),
+            "low": float(candle.low),
+            "close": float(candle.close),
+        })
+
+    return result[-CANDLES_COUNT:]
+
+
+# ============================================================
+# SWING ТОЧКИ
+# ============================================================
+
+def find_swings(candles):
+
+    highs = []
+    lows = []
+
+    w = SWING_WINDOW
+
+    for i in range(
+        w,
+        len(candles) - w
+    ):
+
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+
+        left = candles[
+            i - w:i
         ]
 
-        if not completed.empty:
+        right = candles[
+            i + 1:i + w + 1
+        ]
 
-            wins = (
-                completed["result"]
-                == "WIN"
-            ).sum()
+        left_high = max(
+            x["high"]
+            for x in left
+        )
 
-            total = len(completed)
+        right_high = max(
+            x["high"]
+            for x in right
+        )
 
-            winrate = (
-                wins / total * 100
-            )
+        left_low = min(
+            x["low"]
+            for x in left
+        )
 
-            message = (
-                "🤖 MARKUS AI\n\n"
-                f"Фьючерс: {ticker}\n"
-                f"ТФ: {INTERVAL}\n"
-                f"Сигналов: {len(results)}\n"
-                f"Завершено: {total}\n"
-                f"WIN: {wins}\n"
-                f"Проходимость: "
-                f"{winrate:.2f}%\n\n"
-                "⚠️ Это исторический "
-                "бэктест, не торговый сигнал."
-            )
+        right_low = min(
+            x["low"]
+            for x in right
+        )
 
-            send_telegram(
-                message
-            )
+        if (
+            high > left_high
+            and
+            high > right_high
+        ):
 
+            highs.append(i)
+
+        if (
+            low < left_low
+            and
+            low < right_low
+        ):
+
+            lows.append(i)
+
+    return highs, lows
+
+
+# ============================================================
+# SHORT
+#
+# H1 < H2 < H3
+#
+# Три последовательных повышающихся максимума.
+# ============================================================
+
+def check_short(
+    candles,
+    highs,
+):
+
+    if len(highs) < 3:
+
+        return False
+
+    a = highs[-3]
+    b = highs[-2]
+    c = highs[-1]
+
+    h1 = candles[a]["high"]
+    h2 = candles[b]["high"]
+    h3 = candles[c]["high"]
+
+    if not (
+        h1 < h2 < h3
+    ):
+
+        return False
+
+    movement = (
+        (h3 - h1)
+        / h1
+        * 100
+    )
+
+    return (
+        movement
+        >= MIN_MOVE_PERCENT
+    )
+
+
+# ============================================================
+# LONG
+#
+# L1 > L2 > L3
+#
+# Три последовательных понижающихся минимума.
+# ============================================================
+
+def check_long(
+    candles,
+    lows,
+):
+
+    if len(lows) < 3:
+
+        return False
+
+    a = lows[-3]
+    b = lows[-2]
+    c = lows[-1]
+
+    l1 = candles[a]["low"]
+    l2 = candles[b]["low"]
+    l3 = candles[c]["low"]
+
+    if not (
+        l1 > l2 > l3
+    ):
+
+        return False
+
+    movement = (
+        (l1 - l3)
+        / l1
+        * 100
+    )
+
+    return (
+        movement
+        >= MIN_MOVE_PERCENT
+    )
+
+
+# ============================================================
+# ПОЛУЧЕНИЕ ТЕКУЩЕЙ ПОЗИЦИИ
+# ============================================================
+
+def get_position(
+    client,
+    account_id,
+    instrument_uid,
+):
+
+    response = (
+        client.operations.get_positions(
+            account_id=account_id
+        )
+    )
+
+    for position in response.securities:
+
+        if (
+            position.instrument_uid
+            != instrument_uid
+        ):
+            continue
+
+        return position.balance
+
+    return 0
+
+
+# ============================================================
+# ОТПРАВКА ЗАЯВКИ
+# ============================================================
+
+def send_market_order(
+    client,
+    account_id,
+    instrument_uid,
+    direction,
+):
+
+    if not LIVE_TRADING:
+
+        log.warning(
+            "TEST MODE: заявка НЕ отправлена"
+        )
+
+        telegram(
+            f"⚠️ СИГНАЛ\n"
+            f"{direction}\n"
+            f"Инструмент: {BASE_TICKER}\n"
+            f"Реальная заявка: НЕТ"
+        )
+
+        return None
+
+    if direction == "LONG":
+
+        order_direction = (
+            OrderDirection
+            .ORDER_DIRECTION_BUY
+        )
+
+    else:
+
+        order_direction = (
+            OrderDirection
+            .ORDER_DIRECTION_SELL
+        )
+
+    response = (
+        client.orders.post_order(
+            account_id=account_id,
+            instrument_id=instrument_uid,
+            quantity=LOTS,
+            direction=order_direction,
+            order_type=OrderType
+            .ORDER_TYPE_MARKET,
+        )
+    )
+
+    log.info(
+        "Заявка отправлена: %s",
+        response.order_id,
+    )
+
+    telegram(
+        f"🚨 ЗАЯВКА ОТПРАВЛЕНА\n"
+        f"Направление: {direction}\n"
+        f"Инструмент: {BASE_TICKER}\n"
+        f"Лотов: {LOTS}\n"
+        f"Order ID: {response.order_id}"
+    )
+
+    return response
+
+
+# ============================================================
+# ОСНОВНОЙ ТОРГОВЫЙ ЦИКЛ
+# ============================================================
+
+def trading_loop():
+
+    BOT_STATUS["running"] = True
+
+    check_environment()
+
+    with Client(
+        T_BANK_TOKEN
+    ) as client:
+
+        account_id = (
+            get_account_id(client)
+        )
+
+        log.info(
+            "ACCOUNT_ID = %s",
+            account_id,
+        )
+
+        future = find_si_future(
+            client
+        )
+
+        instrument_uid = future.uid
+
+        BOT_STATUS[
+            "instrument"
+        ] = future.ticker
+
+        telegram(
+            "🤖 Торговый бот запущен\n"
+            f"Инструмент: {future.ticker}\n"
+            f"Режим: "
+            f"{'REAL' if LIVE_TRADING else 'TEST'}"
+        )
+
+        last_signal = None
+
+        while True:
+
+            try:
+
+                candles = get_candles(
+                    client,
+                    instrument_uid
+                )
+
+                if len(candles) < 30:
+
+                    log.warning(
+                        "Недостаточно свечей"
+                    )
+
+                    time.sleep(
+                        CHECK_INTERVAL
+                    )
+
+                    continue
+
+                highs, lows = (
+                    find_swings(candles)
+                )
+
+                last_candle = candles[-1]
+
+                price = (
+                    last_candle["close"]
+                )
+
+                BOT_STATUS[
+                    "last_price"
+                ] = price
+
+                signal = None
+
+                if check_short(
+                    candles,
+                    highs
+                ):
+
+                    signal = "SHORT"
+
+                elif check_long(
+                    candles,
+                    lows
+                ):
+
+                    signal = "LONG"
+
+                log.info(
+                    "Цена=%s | "
+                    "HIGH=%s | "
+                    "LOW=%s | "
+                    "SIGNAL=%s",
+                    price,
+                    len(highs),
+                    len(lows),
+                    signal or "-",
+                )
+
+                if signal:
+
+                    signal_key = (
+                        f"{signal}_"
+                        f"{last_candle['time']}"
+                    )
+
+                    if (
+                        signal_key
+                        != last_signal
+                    ):
+
+                        BOT_STATUS[
+                            "last_signal"
+                        ] = signal
+
+                        BOT_STATUS[
+                            "last_signal_time"
+                        ] = str(
+                            last_candle[
+                                "time"
+                            ]
+                        )
+
+                        log.warning(
+                            "🔥 SIGNAL: %s",
+                            signal,
+                        )
+
+                        # ------------------------------------------------
+                        # Проверяем позицию
+                        # ------------------------------------------------
+
+                        position = (
+                            get_position(
+                                client,
+                                account_id,
+                                instrument_uid,
+                            )
+                        )
+
+                        log.info(
+                            "Текущая позиция: %s",
+                            position,
+                        )
+
+                        # ------------------------------------------------
+                        # Если позиции нет — открываем
+                        # ------------------------------------------------
+
+                        if position == 0:
+
+                            send_market_order(
+                                client,
+                                account_id,
+                                instrument_uid,
+                                signal,
+                            )
+
+                        else:
+
+                            log.info(
+                                "Позиция уже существует. "
+                                "Новая не открывается."
+                            )
+
+                        last_signal = (
+                            signal_key
+                        )
+
+                time.sleep(
+                    CHECK_INTERVAL
+                )
+
+            except Exception as error:
+
+                log.exception(
+                    "Ошибка торгового цикла: %s",
+                    error,
+                )
+
+                telegram(
+                    "❌ ОШИБКА БОТА\n"
+                    f"{error}"
+                )
+
+                time.sleep(30)
+
+
+# ============================================================
+# ЗАПУСК БОТА В ФОНОВОМ ПОТОКЕ
+# ============================================================
+
+def start_bot():
+
+    thread = threading.Thread(
+        target=trading_loop,
+        daemon=True,
+    )
+
+    thread.start()
+
+
+# ============================================================
+# START
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+
+    start_bot()
+
+    port = int(
+        os.getenv(
+            "PORT",
+            "10000"
+        )
+    )
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+    )
