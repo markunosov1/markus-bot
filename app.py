@@ -1,45 +1,70 @@
 import os
+import time
 import logging
 import threading
-import time
+import warnings
 from datetime import datetime, timedelta, timezone
 
 import requests
+import urllib3
+
 from flask import Flask, jsonify, render_template_string
 
 
 # ============================================================
-# НАСТРОЙКИ
+# MARKUS TRADE
 # ============================================================
 
 APP_NAME = "Markus Trade"
 
-API_URL = "https://invest-public-api.tbank.ru/rest"
+API_BASE = "https://invest-public-api.tbank.ru/rest"
 
-FUTURES_ENDPOINT = (
-    API_URL +
-    "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
+FUTURES_URL = (
+    API_BASE
+    + "/tinkoff.public.invest.api.contract.v1."
+      "InstrumentsService/Futures"
 )
 
-CANDLES_ENDPOINT = (
-    API_URL +
-    "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles"
+CANDLES_URL = (
+    API_BASE
+    + "/tinkoff.public.invest.api.contract.v1."
+      "MarketDataService/GetCandles"
 )
 
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 30
 
 # 15-минутные свечи
 CANDLE_INTERVAL = "CANDLE_INTERVAL_15_MIN"
 
-# Сколько свечей пытаемся получить
-CANDLE_LIMIT = 500
-
-# Сколько часов истории запрашиваем
+# История для анализа
 HISTORY_HOURS = 24 * 7
 
 
 # ============================================================
-# ЛОГИ
+# SSL
+# ============================================================
+
+# У тебя была ошибка:
+#
+# SSLCertVerificationError
+# self-signed certificate in certificate chain
+#
+# Поэтому временно отключаем проверку сертификата.
+# После того как API заработает, сделаем нормальную
+# проверку сертификата.
+#
+urllib3.disable_warnings(
+    urllib3.exceptions.InsecureRequestWarning
+)
+
+warnings.filterwarnings(
+    "ignore",
+    message="Unverified HTTPS request"
+)
+
+
+# ============================================================
+# LOGGING
 # ============================================================
 
 logging.basicConfig(
@@ -47,7 +72,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-log = logging.getLogger("markus_trade")
+log = logging.getLogger("MARKUS_TRADE")
 
 
 # ============================================================
@@ -58,22 +83,12 @@ app = Flask(__name__)
 
 
 # ============================================================
-# ПОИСК API-КЛЮЧА
+# ПОЛУЧЕНИЕ ТОКЕНА
 # ============================================================
 
 def get_token():
-    """
-    Ищем токен в переменных окружения.
 
-    Поддерживаются:
-    TINKOFF_TOKEN
-    TINVEST_TOKEN
-    T_BANK_TOKEN
-    API_TOKEN
-    TOKEN
-    """
-
-    names = [
+    possible_names = [
         "TINKOFF_TOKEN",
         "TINVEST_TOKEN",
         "T_BANK_TOKEN",
@@ -81,30 +96,39 @@ def get_token():
         "TOKEN",
     ]
 
-    for name in names:
-        value = os.getenv(name)
+    for name in possible_names:
+
+        value = os.environ.get(name)
 
         if value:
+
             value = value.strip()
 
             if value:
-                log.info("API-токен найден в переменной %s", name)
+
+                log.info(
+                    "API-токен найден: %s",
+                    name
+                )
+
                 return value
 
     return None
 
 
 # ============================================================
-# HTTP ЗАПРОС
+# ОБЩИЙ POST ЗАПРОС
 # ============================================================
 
 def api_post(url, payload):
+
     token = get_token()
 
     if not token:
+
         raise RuntimeError(
-            "Не найден API-токен. "
-            "Проверь переменную TINKOFF_TOKEN / TINVEST_TOKEN / TOKEN."
+            "API-токен не найден. "
+            "Проверь переменную с токеном."
         )
 
     headers = {
@@ -112,32 +136,42 @@ def api_post(url, payload):
         "Content-Type": "application/json",
     }
 
+    log.info(
+        "Запрос: %s",
+        url
+    )
+
     response = requests.post(
         url,
         headers=headers,
         json=payload,
         timeout=REQUEST_TIMEOUT,
+        verify=False
     )
 
     log.info(
-        "API %s -> HTTP %s",
-        url.split("/")[-1],
+        "Ответ HTTP: %s",
         response.status_code
     )
 
     if response.status_code != 200:
-        text = response.text[:1000]
 
         raise RuntimeError(
-            f"API HTTP {response.status_code}: {text}"
+            "HTTP "
+            + str(response.status_code)
+            + ": "
+            + response.text[:2000]
         )
 
     try:
+
         return response.json()
 
-    except Exception as e:
+    except Exception:
+
         raise RuntimeError(
-            f"API вернул некорректный JSON: {e}"
+            "API вернул не JSON:\n"
+            + response.text[:2000]
         )
 
 
@@ -147,24 +181,53 @@ def api_post(url, payload):
 
 def get_all_futures():
 
-    payload = {
-        "instrumentStatus": "INSTRUMENT_STATUS_ALL"
-    }
-
-    data = api_post(
-        FUTURES_ENDPOINT,
-        payload
+    log.info(
+        "Получаю список фьючерсов..."
     )
 
-    futures = data.get("futures")
+    payload = {
+        "instrumentStatus":
+            "INSTRUMENT_STATUS_BASE"
+    }
 
-    if futures is None:
-        futures = data.get("instruments")
+    try:
 
-    if futures is None:
-        futures = []
+        data = api_post(
+            FUTURES_URL,
+            payload
+        )
 
-    if not isinstance(futures, list):
+    except Exception as e:
+
+        # Некоторые конфигурации API могут не принять
+        # фильтр INSTRUMENT_STATUS_BASE.
+        # Тогда пробуем ALL.
+
+        log.warning(
+            "Первый запрос Futures не прошёл: %s",
+            e
+        )
+
+        payload = {
+            "instrumentStatus":
+                "INSTRUMENT_STATUS_ALL"
+        }
+
+        data = api_post(
+            FUTURES_URL,
+            payload
+        )
+
+    futures = data.get(
+        "futures",
+        []
+    )
+
+    if not isinstance(
+        futures,
+        list
+    ):
+
         futures = []
 
     log.info(
@@ -176,29 +239,10 @@ def get_all_futures():
 
 
 # ============================================================
-# ПРЕОБРАЗОВАНИЕ ДАТЫ
+# БЕЗОПАСНОЕ ПОЛУЧЕНИЕ СТРОКИ
 # ============================================================
 
-def parse_date(value):
-
-    if not value:
-        return None
-
-    try:
-        # Например:
-        # 2026-09-18T00:00:00Z
-        return datetime.fromisoformat(
-            value.replace("Z", "+00:00")
-        )
-    except Exception:
-        return None
-
-
-# ============================================================
-# ПОЛУЧЕНИЕ СТРОКИ ИЗ ОБЪЕКТА
-# ============================================================
-
-def safe_str(obj, key):
+def get_string(obj, key):
 
     value = obj.get(key)
 
@@ -209,43 +253,77 @@ def safe_str(obj, key):
 
 
 # ============================================================
-# ПРОВЕРКА ФЬЮЧЕРСА
+# ДАТА
 # ============================================================
 
-def future_matches(future, prefix):
+def parse_date(value):
+
+    if not value:
+        return None
+
+    try:
+
+        return datetime.fromisoformat(
+            str(value).replace(
+                "Z",
+                "+00:00"
+            )
+        )
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
+# ОПРЕДЕЛЕНИЕ ФЬЮЧЕРСА
+# ============================================================
+
+def matches_future(future, prefix):
 
     prefix = prefix.upper()
 
-    ticker = safe_str(future, "ticker").upper()
-    name = safe_str(future, "name").upper()
-    basic_asset = safe_str(future, "basicAsset").upper()
-    basic_asset_position_uid = safe_str(
+    ticker = get_string(
         future,
-        "basicAssetPositionUid"
+        "ticker"
+    ).upper()
+
+    name = get_string(
+        future,
+        "name"
+    ).upper()
+
+    basic_asset = get_string(
+        future,
+        "basicAsset"
     ).upper()
 
     # --------------------------------------------------------
-    # 1. Самый надёжный вариант — тикер
+    # Сначала ищем непосредственно по тикеру
     # --------------------------------------------------------
 
     if ticker.startswith(prefix):
+
         return True
 
     # --------------------------------------------------------
-    # 2. Основной актив
+    # ЮАНЬ
     # --------------------------------------------------------
 
     if prefix == "CR":
 
-        keywords = [
+        words = [
             "CNY",
             "YUAN",
             "CNH",
-            "КИТАЙСК",
-            "ЮАН"
+            "ЮАН",
+            "КИТАЙ"
         ]
 
-        for word in keywords:
+        for word in words:
+
+            if word in ticker:
+                return True
 
             if word in name:
                 return True
@@ -253,22 +331,21 @@ def future_matches(future, prefix):
             if word in basic_asset:
                 return True
 
-            if word in basic_asset_position_uid:
-                return True
-
     # --------------------------------------------------------
-    # GOLD
+    # ЗОЛОТО
     # --------------------------------------------------------
 
     if prefix == "GD":
 
-        keywords = [
+        words = [
             "GOLD",
-            "ЗОЛОТ",
-            "ЗОЛОТО"
+            "ЗОЛОТ"
         ]
 
-        for word in keywords:
+        for word in words:
+
+            if word in ticker:
+                return True
 
             if word in name:
                 return True
@@ -282,12 +359,15 @@ def future_matches(future, prefix):
 
     if prefix == "BR":
 
-        keywords = [
+        words = [
             "BRENT",
             "БРЕНТ"
         ]
 
-        for word in keywords:
+        for word in words:
+
+            if word in ticker:
+                return True
 
             if word in name:
                 return True
@@ -299,136 +379,205 @@ def future_matches(future, prefix):
 
 
 # ============================================================
-# ПОИСК АКТИВНОГО ФЬЮЧЕРСА
+# ПОИСК АКТИВНОГО КОНТРАКТА
 # ============================================================
 
 def find_active_future(prefix):
 
     log.info(
-        "Ищу актуальный фьючерс: %s",
+        "--------------------------------------"
+    )
+
+    log.info(
+        "Ищу фьючерс: %s",
         prefix
     )
 
     futures = get_all_futures()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(
+        timezone.utc
+    )
 
     candidates = []
 
     for future in futures:
 
-        if not future_matches(future, prefix):
+        if not matches_future(
+            future,
+            prefix
+        ):
+
             continue
 
-        ticker = safe_str(
+        ticker = get_string(
             future,
             "ticker"
         )
 
-        uid = safe_str(
+        name = get_string(
+            future,
+            "name"
+        )
+
+        uid = get_string(
             future,
             "uid"
         )
 
-        instrument_uid = safe_str(
+        instrument_uid = get_string(
             future,
             "instrumentUid"
         )
 
+        # В разных ответах UID может находиться
+        # в разных полях.
+
         if not instrument_uid:
+
             instrument_uid = uid
 
         if not instrument_uid:
+
             continue
 
-        last_trade_date = parse_date(
-            future.get("lastTradeDate")
+        first_trade = parse_date(
+            future.get(
+                "firstTradeDate"
+            )
         )
 
-        first_trade_date = parse_date(
-            future.get("firstTradeDate")
+        last_trade = parse_date(
+            future.get(
+                "lastTradeDate"
+            )
         )
 
-        # Если дата окончания известна
-        # и контракт уже закончился — пропускаем.
-        if last_trade_date:
+        # Контракт ещё не начал торговаться
+        if first_trade:
 
-            if last_trade_date < now:
+            if first_trade > now:
+
                 continue
 
-        # Если начало торговли в будущем —
-        # тоже пропускаем.
-        if first_trade_date:
+        # Контракт уже закончился
+        if last_trade:
 
-            if first_trade_date > now:
+            if last_trade < now:
+
                 continue
 
-        candidate = {
-            "ticker": ticker,
-            "uid": uid,
-            "instrument_uid": instrument_uid,
-            "name": safe_str(future, "name"),
-            "basic_asset": safe_str(
-                future,
-                "basicAsset"
-            ),
-            "class_code": safe_str(
-                future,
-                "classCode"
-            ),
-            "first_trade_date": (
-                first_trade_date.isoformat()
-                if first_trade_date
-                else ""
-            ),
-            "last_trade_date": (
-                last_trade_date.isoformat()
-                if last_trade_date
-                else ""
-            ),
-            "raw": future,
-        }
+        candidates.append(
+            {
+                "ticker": ticker,
+                "name": name,
+                "uid": uid,
+                "instrument_uid":
+                    instrument_uid,
+                "basic_asset":
+                    get_string(
+                        future,
+                        "basicAsset"
+                    ),
+                "class_code":
+                    get_string(
+                        future,
+                        "classCode"
+                    ),
+                "first_trade":
+                    first_trade,
+                "last_trade":
+                    last_trade,
+            }
+        )
 
-        candidates.append(candidate)
+    # --------------------------------------------------------
+    # Если ничего не нашли
+    # --------------------------------------------------------
 
     if not candidates:
 
         log.warning(
-            "Фьючерс %s не найден",
+            "Фьючерс %s НЕ НАЙДЕН",
             prefix
         )
+
+        # Выводим подходящие объекты для диагностики
+        # если тикер похож хотя бы частично.
+
+        log.info(
+            "Всего инструментов получено: %s",
+            len(futures)
+        )
+
+        for future in futures:
+
+            ticker = get_string(
+                future,
+                "ticker"
+            )
+
+            name = get_string(
+                future,
+                "name"
+            )
+
+            if (
+                prefix in ticker.upper()
+                or
+                prefix in name.upper()
+            ):
+
+                log.info(
+                    "Похожий инструмент: %s | %s",
+                    ticker,
+                    name
+                )
 
         return None
 
     # --------------------------------------------------------
-    # Сортируем по ближайшей дате экспирации.
-    # Это позволяет выбрать актуальный контракт.
+    # Выбираем ближайшую дату экспирации
     # --------------------------------------------------------
 
-    def expiry_key(item):
+    def sort_key(item):
 
-        value = parse_date(
-            item.get("last_trade_date")
+        date = item.get(
+            "last_trade"
         )
 
-        if value:
-            return value
+        if date:
+
+            return date
 
         return datetime.max.replace(
             tzinfo=timezone.utc
         )
 
     candidates.sort(
-        key=expiry_key
+        key=sort_key
     )
 
     selected = candidates[0]
 
     log.info(
-        "Выбран %s | UID=%s | expiry=%s",
-        selected["ticker"],
-        selected["instrument_uid"],
-        selected["last_trade_date"]
+        "НАЙДЕН: %s",
+        selected["ticker"]
+    )
+
+    log.info(
+        "Название: %s",
+        selected["name"]
+    )
+
+    log.info(
+        "UID: %s",
+        selected["instrument_uid"]
+    )
+
+    log.info(
+        "Экспирация: %s",
+        selected["last_trade"]
     )
 
     return selected
@@ -440,23 +589,35 @@ def find_active_future(prefix):
 
 def get_candles(instrument_uid):
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(
+        timezone.utc
+    )
 
-    start = now - timedelta(
-        hours=HISTORY_HOURS
+    start = (
+        now
+        - timedelta(
+            hours=HISTORY_HOURS
+        )
     )
 
     payload = {
         "from": start.isoformat(),
         "to": now.isoformat(),
-        "interval": CANDLE_INTERVAL,
-        "instrumentId": instrument_uid,
-        "limit": CANDLE_LIMIT,
-        "candleSourceType": "CANDLE_SOURCE_EXCHANGE"
+        "interval":
+            CANDLE_INTERVAL,
+        "instrumentId":
+            instrument_uid,
+        "candleSourceType":
+            "CANDLE_SOURCE_EXCHANGE"
     }
 
+    log.info(
+        "Запрашиваю свечи для UID: %s",
+        instrument_uid
+    )
+
     data = api_post(
-        CANDLES_ENDPOINT,
+        CANDLES_URL,
         payload
     )
 
@@ -465,7 +626,11 @@ def get_candles(instrument_uid):
         []
     )
 
-    if not isinstance(candles, list):
+    if not isinstance(
+        candles,
+        list
+    ):
+
         candles = []
 
     log.info(
@@ -477,38 +642,61 @@ def get_candles(instrument_uid):
 
 
 # ============================================================
-# QUOTATION -> FLOAT
+# QUOTATION → ЧИСЛО
 # ============================================================
 
 def quotation_to_float(value):
 
     if value is None:
+
         return 0.0
 
-    if isinstance(value, (int, float)):
+    if isinstance(
+        value,
+        (int, float)
+    ):
+
         return float(value)
 
-    if isinstance(value, dict):
+    if isinstance(
+        value,
+        dict
+    ):
 
-        units = value.get("units", 0)
-        nano = value.get("nano", 0)
+        units = value.get(
+            "units",
+            0
+        )
+
+        nano = value.get(
+            "nano",
+            0
+        )
 
         try:
-            return float(units) + (
-                float(nano) / 1_000_000_000
+
+            return (
+                float(units)
+                +
+                float(nano)
+                / 1_000_000_000
             )
+
         except Exception:
+
             return 0.0
 
     try:
+
         return float(value)
 
     except Exception:
+
         return 0.0
 
 
 # ============================================================
-# ПРЕОБРАЗОВАНИЕ СВЕЧЕЙ
+# НОРМАЛИЗАЦИЯ СВЕЧЕЙ
 # ============================================================
 
 def normalize_candles(candles):
@@ -517,39 +705,51 @@ def normalize_candles(candles):
 
     for candle in candles:
 
-        result.append({
-            "time": candle.get("time"),
+        result.append(
+            {
+                "time":
+                    candle.get("time"),
 
-            "open": quotation_to_float(
-                candle.get("open")
-            ),
+                "open":
+                    quotation_to_float(
+                        candle.get("open")
+                    ),
 
-            "high": quotation_to_float(
-                candle.get("high")
-            ),
+                "high":
+                    quotation_to_float(
+                        candle.get("high")
+                    ),
 
-            "low": quotation_to_float(
-                candle.get("low")
-            ),
+                "low":
+                    quotation_to_float(
+                        candle.get("low")
+                    ),
 
-            "close": quotation_to_float(
-                candle.get("close")
-            ),
+                "close":
+                    quotation_to_float(
+                        candle.get("close")
+                    ),
 
-            "volume": int(
-                candle.get("volume", 0) or 0
-            )
-        })
+                "volume":
+                    int(
+                        candle.get(
+                            "volume",
+                            0
+                        ) or 0
+                    )
+            }
+        )
 
     result.sort(
-        key=lambda x: x.get("time") or ""
+        key=lambda x:
+            x.get("time") or ""
     )
 
     return result
 
 
 # ============================================================
-# АНАЛИЗ ТВОЕЙ СТРАТЕГИИ
+# ТВОЯ СТРАТЕГИЯ
 # ============================================================
 
 def analyze_strategy(candles):
@@ -557,129 +757,172 @@ def analyze_strategy(candles):
     if len(candles) < 8:
 
         return {
-            "signal": "Нет сигналов",
-            "direction": "—",
-            "description": "Недостаточно свечей"
+            "signal":
+                "Нет сигналов",
+
+            "direction":
+                "—",
+
+            "description":
+                "Недостаточно свечей"
         }
 
-    # Последние свечи
-    recent = candles[-8:]
+    last = candles[-8:]
 
     highs = [
         x["high"]
-        for x in recent
+        for x in last
     ]
 
     lows = [
         x["low"]
-        for x in recent
+        for x in last
     ]
 
     closes = [
         x["close"]
-        for x in recent
+        for x in last
     ]
 
-    # --------------------------------------------------------
-    # Твоя идея SHORT:
+    # ========================================================
+    # SHORT
     #
-    # каждый новый максимум выше предыдущего,
-    # затем появляется сильное движение вниз.
-    # --------------------------------------------------------
+    # Последовательные максимумы выше предыдущих,
+    # затем два снижения подряд.
+    # ========================================================
 
     rising_highs = (
-        highs[3] > highs[2] and
-        highs[4] > highs[3] and
+        highs[3] > highs[2]
+        and
+        highs[4] > highs[3]
+        and
         highs[5] > highs[4]
     )
 
-    falling_after_high = (
-        closes[-1] < closes[-2] and
+    falling = (
+        closes[-1] < closes[-2]
+        and
         closes[-2] < closes[-3]
     )
 
-    # --------------------------------------------------------
-    # LONG:
+    if (
+        rising_highs
+        and
+        falling
+    ):
+
+        return {
+            "signal":
+                "SHORT",
+
+            "direction":
+                "ВНИЗ",
+
+            "description":
+                "Обнаружена последовательность "
+                "повышающихся максимумов с "
+                "последующим снижением."
+        }
+
+    # ========================================================
+    # LONG
     #
-    # последовательные минимумы ниже предыдущих,
-    # затем появляется движение вверх.
-    # --------------------------------------------------------
+    # Последовательные минимумы ниже предыдущих,
+    # затем два роста подряд.
+    # ========================================================
 
     falling_lows = (
-        lows[3] < lows[2] and
-        lows[4] < lows[3] and
+        lows[3] < lows[2]
+        and
+        lows[4] < lows[3]
+        and
         lows[5] < lows[4]
     )
 
-    rising_after_low = (
-        closes[-1] > closes[-2] and
+    rising = (
+        closes[-1] > closes[-2]
+        and
         closes[-2] > closes[-3]
     )
 
-    # --------------------------------------------------------
-    # SHORT
-    # --------------------------------------------------------
-
-    if rising_highs and falling_after_high:
-
-        return {
-            "signal": "SHORT",
-            "direction": "ВНИЗ",
-            "description": (
-                "Обнаружена последовательность "
-                "повышающихся максимумов "
-                "с последующим снижением."
-            )
-        }
-
-    # --------------------------------------------------------
-    # LONG
-    # --------------------------------------------------------
-
-    if falling_lows and rising_after_low:
+    if (
+        falling_lows
+        and
+        rising
+    ):
 
         return {
-            "signal": "LONG",
-            "direction": "ВВЕРХ",
-            "description": (
-                "Обнаружена последовательность "
-                "понижающихся минимумов "
-                "с последующим ростом."
-            )
-        }
+            "signal":
+                "LONG",
 
-    # --------------------------------------------------------
-    # НЕТ СИГНАЛА
-    # --------------------------------------------------------
+            "direction":
+                "ВВЕРХ",
+
+            "description":
+                "Обнаружена последовательность "
+                "понижающихся минимумов с "
+                "последующим ростом."
+        }
 
     return {
-        "signal": "Нет сигналов",
-        "direction": "—",
-        "description": "Условия стратегии пока не выполнены."
+        "signal":
+            "Нет сигналов",
+
+        "direction":
+            "—",
+
+        "description":
+            "Условия стратегии пока не выполнены."
     }
 
 
 # ============================================================
-# СОСТОЯНИЕ ИНСТРУМЕНТА
+# СТАТУС ОДНОГО ФЬЮЧЕРСА
 # ============================================================
 
-def get_future_status(prefix, title, emoji):
+def get_future_status(
+    prefix,
+    title,
+    emoji
+):
 
-    base = {
-        "prefix": prefix,
-        "title": title,
-        "emoji": emoji,
-        "status": "Ошибка",
-        "message": "",
-        "uid": "",
-        "ticker": "",
-        "candles": 0,
-        "data": [],
-        "strategy": {
-            "signal": "Нет сигналов",
-            "direction": "—",
-            "description": ""
-        }
+    result = {
+
+        "prefix":
+            prefix,
+
+        "title":
+            title,
+
+        "emoji":
+            emoji,
+
+        "status":
+            "Ошибка",
+
+        "message":
+            "",
+
+        "ticker":
+            "",
+
+        "uid":
+            "",
+
+        "candles":
+            0,
+
+        "strategy":
+            {
+                "signal":
+                    "Нет сигналов",
+
+                "direction":
+                    "—",
+
+                "description":
+                    ""
+            }
     }
 
     try:
@@ -690,15 +933,24 @@ def get_future_status(prefix, title, emoji):
 
         if not future:
 
-            base["status"] = "Не найден"
-            base["message"] = (
-                "Актуальный контракт не найден"
+            result["status"] = (
+                "Не найден"
             )
 
-            return base
+            result["message"] = (
+                "Актуальный контракт "
+                "не найден."
+            )
 
-        base["ticker"] = future["ticker"]
-        base["uid"] = future["instrument_uid"]
+            return result
+
+        result["ticker"] = (
+            future["ticker"]
+        )
+
+        result["uid"] = (
+            future["instrument_uid"]
+        )
 
         candles_raw = get_candles(
             future["instrument_uid"]
@@ -708,56 +960,66 @@ def get_future_status(prefix, title, emoji):
             candles_raw
         )
 
-        base["candles"] = len(
-            candles
+        result["candles"] = (
+            len(candles)
         )
-
-        base["data"] = candles
 
         if not candles:
 
-            base["status"] = "Нет свечей"
+            result["status"] = (
+                "Нет свечей"
+            )
 
-            base["message"] = (
+            result["message"] = (
                 "Фьючерс найден, "
                 "но свечи не получены."
             )
 
-            return base
+            return result
 
-        base["status"] = "OK"
+        result["status"] = "OK"
 
-        base["message"] = (
+        result["message"] = (
             "Данные получены"
         )
 
-        base["strategy"] = (
-            analyze_strategy(candles)
+        result["strategy"] = (
+            analyze_strategy(
+                candles
+            )
         )
 
-        return base
+        return result
 
     except Exception as e:
 
         log.exception(
-            "Ошибка %s",
+            "Ошибка обработки %s",
             prefix
         )
 
-        base["status"] = "Ошибка"
+        result["status"] = (
+            "Ошибка"
+        )
 
-        base["message"] = str(e)
+        result["message"] = (
+            str(e)
+        )
 
-        return base
+        return result
 
 
 # ============================================================
-# ВСЕ ДАННЫЕ
+# ВСЕ ИНСТРУМЕНТЫ
 # ============================================================
 
-def collect_all_data():
+def collect_data():
 
     results = []
+
+    # --------------------------------------------------------
+    # ЮАНЬ
+    # --------------------------------------------------------
 
     results.append(
         get_future_status(
@@ -767,6 +1029,10 @@ def collect_all_data():
         )
     )
 
+    # --------------------------------------------------------
+    # ЗОЛОТО
+    # --------------------------------------------------------
+
     results.append(
         get_future_status(
             "GD",
@@ -774,6 +1040,10 @@ def collect_all_data():
             "🏆"
         )
     )
+
+    # --------------------------------------------------------
+    # НЕФТЬ
+    # --------------------------------------------------------
 
     results.append(
         get_future_status(
@@ -783,75 +1053,90 @@ def collect_all_data():
         )
     )
 
-    # Последний общий сигнал
-    signal = {
-        "signal": "Нет сигналов",
-        "direction": "—",
-        "description": "Ожидание данных..."
+    # --------------------------------------------------------
+    # ИЩЕМ ПОСЛЕДНИЙ СИГНАЛ
+    # --------------------------------------------------------
+
+    last_signal = {
+
+        "signal":
+            "Нет сигналов",
+
+        "direction":
+            "—",
+
+        "description":
+            "Ожидание данных..."
     }
 
-    # Если где-то появился LONG/SHORT,
-    # показываем его.
     for item in results:
 
-        item_signal = item.get(
+        strategy = item.get(
             "strategy",
             {}
-        ).get(
+        )
+
+        signal = strategy.get(
             "signal"
         )
 
-        if item_signal in (
+        if signal in (
             "LONG",
             "SHORT"
         ):
 
-            signal = item[
-                "strategy"
-            ]
+            last_signal = strategy
 
             break
 
     return {
-        "updated": datetime.now(
-            timezone.utc
-        ).isoformat(),
 
-        "futures": results,
+        "updated":
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
 
-        "last_signal": signal
+        "futures":
+            results,
+
+        "last_signal":
+            last_signal
     }
 
 
 # ============================================================
-# API
+# API STATUS
 # ============================================================
 
 @app.route("/api/status")
-def api_status():
+def status():
 
     try:
 
-        data = collect_all_data()
-
-        return jsonify(data)
+        return jsonify(
+            collect_data()
+        )
 
     except Exception as e:
 
         log.exception(
-            "Общая ошибка API"
+            "Ошибка /api/status"
         )
 
-        return jsonify({
-            "error": str(e)
-        }), 500
+        return jsonify(
+            {
+                "error":
+                    str(e)
+            }
+        ), 500
 
 
 # ============================================================
-# ГЛАВНАЯ СТРАНИЦА
+# HTML
 # ============================================================
 
-HTML = r"""
+HTML = """
+
 <!DOCTYPE html>
 
 <html lang="ru">
@@ -862,7 +1147,8 @@ HTML = r"""
 
 <meta
     name="viewport"
-    content="width=device-width, initial-scale=1.0"
+    content="width=device-width,
+    initial-scale=1.0"
 >
 
 <title>Markus Trade</title>
@@ -879,7 +1165,7 @@ body {
 
     background: #0b0b0b;
 
-    color: white;
+    color: #ffffff;
 
     font-family:
         -apple-system,
@@ -891,12 +1177,12 @@ body {
 
 .header {
 
-    padding: 30px 20px 20px;
+    padding: 28px 20px 20px;
 
     text-align: center;
 
     border-bottom:
-        1px solid #242424;
+        1px solid #252525;
 }
 
 .header h1 {
@@ -904,17 +1190,14 @@ body {
     margin: 0;
 
     font-size: 28px;
-
-    font-weight: 700;
 }
 
 .header p {
 
-    margin: 7px 0 0;
+    margin: 6px 0 0;
 
     color: #888;
 
-    font-size: 15px;
 }
 
 .container {
@@ -938,10 +1221,6 @@ body {
     padding: 24px;
 
     margin-bottom: 18px;
-
-    box-shadow:
-        0 8px 30px
-        rgba(0,0,0,.25);
 }
 
 .title {
@@ -954,16 +1233,16 @@ body {
 
     letter-spacing: 2px;
 
-    margin-bottom: 18px;
+    margin-bottom: 20px;
 }
 
 .status {
 
-    font-size: 42px;
+    font-size: 38px;
 
     font-weight: 800;
 
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 .ok {
@@ -990,14 +1269,16 @@ body {
 
     margin-top: 12px;
 
-    color: #aaa;
+    color: #999;
 
-    font-size: 17px;
+    font-size: 16px;
+
+    word-break: break-word;
 }
 
 .row span {
 
-    color: white;
+    color: #ffffff;
 }
 
 .signal {
@@ -1008,8 +1289,6 @@ body {
     border-radius: 24px;
 
     padding: 24px;
-
-    margin-top: 20px;
 
     background: #171717;
 }
@@ -1022,21 +1301,23 @@ body {
 
     letter-spacing: 2px;
 
-    margin-bottom: 20px;
+    margin-bottom: 18px;
 }
 
 .signal-value {
 
-    font-size: 25px;
+    font-size: 23px;
 
-    margin: 10px 0;
+    margin: 12px 0;
 }
 
 button {
 
     width: 100%;
 
-    padding: 15px;
+    margin-top: 18px;
+
+    padding: 16px;
 
     border: none;
 
@@ -1049,25 +1330,22 @@ button {
     font-size: 17px;
 
     font-weight: 700;
-
-    margin-top: 15px;
 }
 
 .small {
 
-    color: #777;
+    color: #666;
 
-    font-size: 13px;
+    text-align: center;
 
     margin-top: 15px;
 
-    text-align: center;
+    font-size: 12px;
 }
 
 </style>
 
 </head>
-
 
 <body>
 
@@ -1081,7 +1359,10 @@ button {
 </div>
 
 
-<div class="container" id="app">
+<div
+    class="container"
+    id="app"
+>
 
     <div class="card">
 
@@ -1090,7 +1371,7 @@ button {
         </div>
 
         <div class="row">
-            Получаем список фьючерсов
+            Подключение к T-Bank API
         </div>
 
     </div>
@@ -1100,15 +1381,31 @@ button {
 
 <script>
 
+function esc(value) {
+
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+
+}
+
+
 async function loadData() {
 
     const app =
-        document.getElementById("app");
+        document.getElementById(
+            "app"
+        );
 
     try {
 
         const response =
-            await fetch("/api/status");
+            await fetch(
+                "/api/status"
+            );
 
         const data =
             await response.json();
@@ -1116,7 +1413,8 @@ async function loadData() {
         if (!response.ok) {
 
             throw new Error(
-                data.error || "Ошибка сервера"
+                data.error ||
+                "Ошибка сервера"
             );
 
         }
@@ -1136,7 +1434,11 @@ async function loadData() {
                 </div>
 
                 <div class="row">
-                    ${escapeHtml(error.message)}
+
+                    ${esc(
+                        error.message
+                    )}
+
                 </div>
 
             </div>
@@ -1152,18 +1454,21 @@ function render(data) {
 
     let html = "";
 
+    const futures =
+        data.futures || [];
+
+
     for (
-        const item of data.futures
+        const item of futures
     ) {
 
-        let statusClass =
-            "warning";
+        let cls = "warning";
 
         if (
             item.status === "OK"
         ) {
 
-            statusClass = "ok";
+            cls = "ok";
 
         }
 
@@ -1171,9 +1476,10 @@ function render(data) {
             item.status === "Ошибка"
         ) {
 
-            statusClass = "error";
+            cls = "error";
 
         }
+
 
         html += `
 
@@ -1181,52 +1487,74 @@ function render(data) {
 
                 <div class="title">
 
-                    ${item.emoji}
-                    ${escapeHtml(item.title)}
+                    ${esc(
+                        item.emoji
+                    )}
 
-                </div>
-
-                <div class="status ${statusClass}">
-
-                    ${escapeHtml(item.status)}
-
-                </div>
-
-                <div class="row">
-
-                    ${escapeHtml(
-                        item.message || ""
+                    ${esc(
+                        item.title
                     )}
 
                 </div>
 
+
+                <div
+                    class="status ${cls}"
+                >
+
+                    ${esc(
+                        item.status
+                    )}
+
+                </div>
+
+
+                <div class="row">
+
+                    ${esc(
+                        item.message
+                    )}
+
+                </div>
+
+
                 <div class="row">
 
                     Тикер:
+
                     <span>
-                        ${escapeHtml(
-                            item.ticker || "—"
+                        ${esc(
+                            item.ticker ||
+                            "—"
                         )}
                     </span>
 
                 </div>
+
 
                 <div class="row">
 
                     UID:
+
                     <span>
-                        ${escapeHtml(
-                            item.uid || "—"
+                        ${esc(
+                            item.uid ||
+                            "—"
                         )}
                     </span>
 
                 </div>
 
+
                 <div class="row">
 
                     Свечей:
+
                     <span>
-                        ${item.candles || 0}
+                        ${esc(
+                            item.candles ||
+                            0
+                        )}
                     </span>
 
                 </div>
@@ -1241,29 +1569,38 @@ function render(data) {
     const signal =
         data.last_signal || {};
 
+
     html += `
 
         <div class="signal">
 
             <div class="signal-title">
 
-                ПОСЛЕДНИЙ СИГНАЛ СТРАТЕГИИ
+                ПОСЛЕДНИЙ СИГНАЛ
+                СТРАТЕГИИ
 
             </div>
+
 
             <div class="signal-value">
 
                 Статус:
+
                 <span class="info">
 
-                    ${signal.signal ===
+                    ${
+                        signal.signal ===
                         "Нет сигналов"
+
                         ? "Ожидание данных..."
-                        : "Сигнал обнаружен"}
+
+                        : "Сигнал обнаружен"
+                    }
 
                 </span>
 
             </div>
+
 
             <div class="signal-value">
 
@@ -1271,7 +1608,7 @@ function render(data) {
 
                 <span>
 
-                    ${escapeHtml(
+                    ${esc(
                         signal.signal ||
                         "Нет сигналов"
                     )}
@@ -1280,13 +1617,14 @@ function render(data) {
 
             </div>
 
+
             <div class="signal-value">
 
                 Направление:
 
                 <span>
 
-                    ${escapeHtml(
+                    ${esc(
                         signal.direction ||
                         "—"
                     )}
@@ -1295,10 +1633,12 @@ function render(data) {
 
             </div>
 
+
             <div class="row">
 
-                ${escapeHtml(
-                    signal.description || ""
+                ${esc(
+                    signal.description ||
+                    ""
                 )}
 
             </div>
@@ -1318,7 +1658,8 @@ function render(data) {
         <div class="small">
 
             Последнее обновление:
-            ${escapeHtml(
+
+            ${esc(
                 data.updated || ""
             )}
 
@@ -1334,26 +1675,8 @@ function render(data) {
 }
 
 
-function escapeHtml(value) {
-
-    return String(value)
-
-        .replaceAll("&", "&amp;")
-
-        .replaceAll("<", "&lt;")
-
-        .replaceAll(">", "&gt;")
-
-        .replaceAll('"', "&quot;")
-
-        .replaceAll("'", "&#039;");
-}
-
-
 loadData();
 
-
-// Обновляем каждые 60 секунд
 
 setInterval(
     loadData,
@@ -1366,11 +1689,12 @@ setInterval(
 </body>
 
 </html>
+
 """
 
 
 # ============================================================
-# WEB
+# ГЛАВНАЯ
 # ============================================================
 
 @app.route("/")
@@ -1382,17 +1706,64 @@ def index():
 
 
 # ============================================================
-# ПРОВЕРКА ПРИ ЗАПУСКЕ
+# ФОНОВЫЙ МОНИТОР
 # ============================================================
 
-def startup_check():
+def background_monitor():
+
+    while True:
+
+        try:
+
+            log.info(
+                "======================================"
+            )
+
+            log.info(
+                "ФОНОВАЯ ПРОВЕРКА"
+            )
+
+            data = collect_data()
+
+            signal = data.get(
+                "last_signal",
+                {}
+            )
+
+            log.info(
+                "Последний сигнал: %s",
+                signal.get(
+                    "signal"
+                )
+            )
+
+        except Exception:
+
+            log.exception(
+                "Ошибка фоновой проверки"
+            )
+
+        time.sleep(
+            300
+        )
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+def startup():
 
     log.info(
         "======================================"
     )
 
     log.info(
-        "       MARKUS TRADE START"
+        "       MARKUS TRADE"
+    )
+
+    log.info(
+        "       START"
     )
 
     log.info(
@@ -1404,50 +1775,14 @@ def startup_check():
     if token:
 
         log.info(
-            "API token: найден"
+            "API TOKEN: найден"
         )
 
     else:
 
-        log.warning(
-            "API token: НЕ найден"
+        log.error(
+            "API TOKEN: НЕ НАЙДЕН"
         )
-
-
-# ============================================================
-# ФОНОВОЙ МОНИТОР
-# ============================================================
-
-def background_monitor():
-
-    while True:
-
-        try:
-
-            log.info(
-                "Фоновая проверка фьючерсов..."
-            )
-
-            data = collect_all_data()
-
-            signal = data.get(
-                "last_signal",
-                {}
-            )
-
-            log.info(
-                "Сигнал: %s | Направление: %s",
-                signal.get("signal"),
-                signal.get("direction")
-            )
-
-        except Exception:
-
-            log.exception(
-                "Ошибка фонового мониторинга"
-            )
-
-        time.sleep(300)
 
 
 # ============================================================
@@ -1456,9 +1791,8 @@ def background_monitor():
 
 if __name__ == "__main__":
 
-    startup_check()
+    startup()
 
-    # Фоновый поток
     thread = threading.Thread(
         target=background_monitor,
         daemon=True
@@ -1466,11 +1800,8 @@ if __name__ == "__main__":
 
     thread.start()
 
-    # PythonAnywhere / Render / Railway
-    # обычно передают PORT автоматически.
-
     port = int(
-        os.getenv(
+        os.environ.get(
             "PORT",
             "5000"
         )
