@@ -946,41 +946,32 @@ def normalize_candles(candles):
     return result
 
 
-# ============================================================
-# ТВОЯ СТРАТЕГИЯ
-# ============================================================
+    # --------------------------------------------------------
+    # ИЩЕМ ПОСЛЕДНИЙ СИГНАЛ
+    # --------------------------------------------------------
 
-def analyze_strategy(candles):
+    # 1. По умолчанию считаем, что данные обработаны, но активных входов нет
+    last_signal = {
+        "signal": "Нет сигналов",
+        "direction": "—",
+        "description": "Условия стратегии пока не выполнены во всех инструментах."
+    }
 
-    if len(candles) < 8:
+    # 2. Перебираем инструменты в поисках первого активного сигнала
+    for item in results:
+        strategy = item.get("strategy", {})
+        signal = strategy.get("signal")
 
-        return {
-            "signal":
-                "Нет сигналов",
+        if signal in ("LONG", "SHORT"):
+            last_signal = strategy
+            break  # Нашли сигнал — сохраняем его и выходим из цикла
 
-            "direction":
-                "—",
+    return {
+        "updated": datetime.now(timezone.utc).isoformat(),
+        "futures": results,
+        "last_signal": last_signal
+    }
 
-            "description":
-                "Недостаточно свечей"
-        }
-
-    last = candles[-8:]
-
-    highs = [
-        x["high"]
-        for x in last
-    ]
-
-    lows = [
-        x["low"]
-        for x in last
-    ]
-
-    closes = [
-        x["close"]
-        for x in last
-    ]
 
     # ========================================================
     # SHORT
