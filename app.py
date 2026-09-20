@@ -46,7 +46,7 @@ REQUEST_TIMEOUT = 30
 CANDLE_INTERVAL = "CANDLE_INTERVAL_15_MIN"
 
 # Сколько часов свечей загружать
-HISTORY_HOURS = 24 * 30
+HISTORY_HOURS = 24 * 14
 
 # Как часто обновлять данные
 UPDATE_SECONDS = 300
