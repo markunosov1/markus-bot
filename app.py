@@ -20,6 +20,11 @@ APP_NAME = "Markus Trade"
 API_BASE = "https://invest-public-api.tbank.ru/rest"
 
 FUTURES_URL = (
+    FIND_INSTRUMENT_URL = (
+    API_BASE
+    + "/tinkoff.public.invest.api.contract.v1."
+      "InstrumentsService/FindInstrument"
+)
     API_BASE
     + "/tinkoff.public.invest.api.contract.v1."
       "InstrumentsService/Futures"
@@ -385,162 +390,311 @@ def matches_future(future, prefix):
 def find_active_future(prefix):
 
     log.info(
-        "--------------------------------------"
+        "======================================"
     )
 
     log.info(
-        "Ищу фьючерс: %s",
+        "Ищу фьючерс через FindInstrument: %s",
         prefix
     )
 
-    futures = get_all_futures()
+    # --------------------------------------------------------
+    # Для каждого базового инструмента пробуем несколько
+    # вариантов поиска.
+    # --------------------------------------------------------
 
-    now = datetime.now(
-        timezone.utc
-    )
+    queries = [prefix]
+
+    if prefix == "CR":
+
+        queries = [
+            "CR",
+            "CNY",
+            "юань",
+            "CNY/RUB"
+        ]
+
+    elif prefix == "GD":
+
+        queries = [
+            "GD",
+            "GOLD",
+            "золото"
+        ]
+
+    elif prefix == "BR":
+
+        queries = [
+            "BR",
+            "BRENT",
+            "нефть"
+        ]
 
     candidates = []
 
-    for future in futures:
+    # --------------------------------------------------------
+    # ПОИСК
+    # --------------------------------------------------------
 
-        if not matches_future(
-            future,
-            prefix
+    for query in queries:
+
+        payload = {
+            "query": query,
+            "instrumentKind":
+                "INSTRUMENT_TYPE_FUTURES",
+            "apiTradeAvailableFlag": True
+        }
+
+        log.info(
+            "FindInstrument query=%s",
+            query
+        )
+
+        try:
+
+            data = api_post(
+                FIND_INSTRUMENT_URL,
+                payload
+            )
+
+        except Exception as e:
+
+            log.warning(
+                "Ошибка поиска %s: %s",
+                query,
+                e
+            )
+
+            continue
+
+        instruments = data.get(
+            "instruments",
+            []
+        )
+
+        if not isinstance(
+            instruments,
+            list
         ):
 
-            continue
+            instruments = []
 
-        ticker = get_string(
-            future,
-            "ticker"
+        log.info(
+            "FindInstrument %s -> найдено: %s",
+            query,
+            len(instruments)
         )
 
-        name = get_string(
-            future,
-            "name"
-        )
+        # ----------------------------------------------------
+        # РАЗБИРАЕМ НАЙДЕННЫЕ ИНСТРУМЕНТЫ
+        # ----------------------------------------------------
 
-        uid = get_string(
-            future,
-            "uid"
-        )
+        for item in instruments:
 
-        instrument_uid = get_string(
-            future,
-            "instrumentUid"
-        )
+            ticker = str(
+                item.get(
+                    "ticker",
+                    ""
+                )
+            ).strip()
 
-        # В разных ответах UID может находиться
-        # в разных полях.
+            name = str(
+                item.get(
+                    "name",
+                    ""
+                )
+            ).strip()
 
-        if not instrument_uid:
+            uid = str(
+                item.get(
+                    "uid",
+                    ""
+                )
+            ).strip()
 
-            instrument_uid = uid
+            instrument_uid = str(
+                item.get(
+                    "instrumentUid",
+                    ""
+                )
+            ).strip()
 
-        if not instrument_uid:
+            if not instrument_uid:
 
-            continue
+                instrument_uid = uid
 
-        first_trade = parse_date(
-            future.get(
-                "firstTradeDate"
-            )
-        )
-
-        last_trade = parse_date(
-            future.get(
-                "lastTradeDate"
-            )
-        )
-
-        # Контракт ещё не начал торговаться
-        if first_trade:
-
-            if first_trade > now:
+            if not instrument_uid:
 
                 continue
 
-        # Контракт уже закончился
-        if last_trade:
+            # ------------------------------------------------
+            # ПРОВЕРЯЕМ СООТВЕТСТВИЕ
+            # ------------------------------------------------
 
-            if last_trade < now:
+            text = (
+                ticker
+                + " "
+                + name
+            ).upper()
+
+            matched = False
+
+            if prefix == "CR":
+
+                if (
+                    ticker.upper().startswith("CR")
+                    or
+                    "CNY" in text
+                    or
+                    "ЮАН" in text
+                    or
+                    "КИТАЙ" in text
+                ):
+
+                    matched = True
+
+            elif prefix == "GD":
+
+                if (
+                    ticker.upper().startswith("GD")
+                    or
+                    "GOLD" in text
+                    or
+                    "ЗОЛОТ" in text
+                ):
+
+                    matched = True
+
+            elif prefix == "BR":
+
+                if (
+                    ticker.upper().startswith("BR")
+                    or
+                    "BRENT" in text
+                    or
+                    "БРЕНТ" in text
+                ):
+
+                    matched = True
+
+            if not matched:
 
                 continue
 
-        candidates.append(
-            {
-                "ticker": ticker,
-                "name": name,
-                "uid": uid,
-                "instrument_uid":
-                    instrument_uid,
-                "basic_asset":
-                    get_string(
-                        future,
-                        "basicAsset"
-                    ),
-                "class_code":
-                    get_string(
-                        future,
-                        "classCode"
-                    ),
-                "first_trade":
-                    first_trade,
-                "last_trade":
-                    last_trade,
-            }
-        )
+            # ------------------------------------------------
+            # ДАТЫ
+            # ------------------------------------------------
+
+            first_trade = parse_date(
+                item.get(
+                    "firstTradeDate"
+                )
+            )
+
+            last_trade = parse_date(
+                item.get(
+                    "lastTradeDate"
+                )
+            )
+
+            now = datetime.now(
+                timezone.utc
+            )
+
+            # Контракт ещё не начал торговаться
+            if first_trade:
+
+                if first_trade > now:
+
+                    continue
+
+            # Контракт уже закончился
+            if last_trade:
+
+                if last_trade < now:
+
+                    continue
+
+            candidates.append(
+                {
+                    "ticker":
+                        ticker,
+
+                    "name":
+                        name,
+
+                    "uid":
+                        uid,
+
+                    "instrument_uid":
+                        instrument_uid,
+
+                    "first_trade":
+                        first_trade,
+
+                    "last_trade":
+                        last_trade,
+
+                    "class_code":
+                        str(
+                            item.get(
+                                "classCode",
+                                ""
+                            )
+                        ),
+
+                    "basic_asset":
+                        str(
+                            item.get(
+                                "basicAsset",
+                                ""
+                            )
+                        )
+                }
+            )
 
     # --------------------------------------------------------
-    # Если ничего не нашли
+    # УДАЛЯЕМ ДУБЛИКАТЫ
+    # --------------------------------------------------------
+
+    unique = {}
+
+    for item in candidates:
+
+        unique[
+            item["instrument_uid"]
+        ] = item
+
+    candidates = list(
+        unique.values()
+    )
+
+    # --------------------------------------------------------
+    # НИЧЕГО НЕ НАШЛИ
     # --------------------------------------------------------
 
     if not candidates:
 
-        log.warning(
-            "Фьючерс %s НЕ НАЙДЕН",
+        log.error(
+            "======================================"
+        )
+
+        log.error(
+            "ФЬЮЧЕРС %s НЕ НАЙДЕН",
             prefix
         )
 
-        # Выводим подходящие объекты для диагностики
-        # если тикер похож хотя бы частично.
-
-        log.info(
-            "Всего инструментов получено: %s",
-            len(futures)
+        log.error(
+            "======================================"
         )
-
-        for future in futures:
-
-            ticker = get_string(
-                future,
-                "ticker"
-            )
-
-            name = get_string(
-                future,
-                "name"
-            )
-
-            if (
-                prefix in ticker.upper()
-                or
-                prefix in name.upper()
-            ):
-
-                log.info(
-                    "Похожий инструмент: %s | %s",
-                    ticker,
-                    name
-                )
 
         return None
 
     # --------------------------------------------------------
-    # Выбираем ближайшую дату экспирации
+    # СОРТИРУЕМ ПО БЛИЖАЙШЕЙ ЭКСПИРАЦИИ
     # --------------------------------------------------------
 
-    def sort_key(item):
+    def expiry_key(item):
 
         date = item.get(
             "last_trade"
@@ -555,13 +709,25 @@ def find_active_future(prefix):
         )
 
     candidates.sort(
-        key=sort_key
+        key=expiry_key
     )
+
+    # --------------------------------------------------------
+    # ВЫБИРАЕМ БЛИЖАЙШИЙ АКТУАЛЬНЫЙ
+    # --------------------------------------------------------
 
     selected = candidates[0]
 
     log.info(
-        "НАЙДЕН: %s",
+        "======================================"
+    )
+
+    log.info(
+        "АКТУАЛЬНЫЙ ФЬЮЧЕРС НАЙДЕН"
+    )
+
+    log.info(
+        "Тикер: %s",
         selected["ticker"]
     )
 
@@ -576,9 +742,36 @@ def find_active_future(prefix):
     )
 
     log.info(
+        "ClassCode: %s",
+        selected["class_code"]
+    )
+
+    log.info(
         "Экспирация: %s",
         selected["last_trade"]
     )
+
+    log.info(
+        "======================================"
+    )
+
+    # --------------------------------------------------------
+    # ПОКАЗЫВАЕМ ВСЕ НАЙДЕННЫЕ КОНТРАКТЫ В ЛОГЕ
+    # --------------------------------------------------------
+
+    log.info(
+        "Всего подходящих контрактов: %s",
+        len(candidates)
+    )
+
+    for item in candidates:
+
+        log.info(
+            "Кандидат: %s | UID=%s | expiry=%s",
+            item["ticker"],
+            item["instrument_uid"],
+            item["last_trade"]
+        )
 
     return selected
 
