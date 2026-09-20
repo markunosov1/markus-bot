@@ -19,21 +19,25 @@ APP_NAME = "Markus Trade"
 
 API_BASE = "https://invest-public-api.tbank.ru/rest"
 
-FUTURES_URL = (
-    FIND_INSTRUMENT_URL = (
+# Эндпоинт для поиска конкретного инструмента (например, по тикеру "CR")
+FIND_INSTRUMENT_URL = (
     API_BASE
     + "/tinkoff.public.invest.api.contract.v1."
-      "InstrumentsService/FindInstrument"
-)
-    API_BASE
-    + "/tinkoff.public.invest.api.contract.v1."
-      "InstrumentsService/Futures"
+    "InstrumentsService/FindInstrument"
 )
 
+# Эндпоинт для получения списка всех фьючерсов
+FUTURES_URL = (
+    API_BASE
+    + "/tinkoff.public.invest.api.contract.v1."
+    "InstrumentsService/Futures"
+)
+
+# Эндпоинт для запроса исторических свечей
 CANDLES_URL = (
     API_BASE
     + "/tinkoff.public.invest.api.contract.v1."
-      "MarketDataService/GetCandles"
+    "MarketDataService/GetCandles"
 )
 
 REQUEST_TIMEOUT = 30
@@ -41,8 +45,9 @@ REQUEST_TIMEOUT = 30
 # 15-минутные свечи
 CANDLE_INTERVAL = "CANDLE_INTERVAL_15_MIN"
 
-# История для анализа
+# История для анализа (в часах за неделю)
 HISTORY_HOURS = 24 * 7
+
 
 
 # ============================================================
