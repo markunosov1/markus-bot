@@ -946,122 +946,71 @@ def normalize_candles(candles):
     return result
 
 
-    # --------------------------------------------------------
-    # ИЩЕМ ПОСЛЕДНИЙ СИГНАЛ
-    # --------------------------------------------------------
+# ============================================================
+# ТВОЯ СТРАТЕГИЯ
+# ============================================================
 
-    # 1. По умолчанию считаем, что данные обработаны, но активных входов нет
-    last_signal = {
-        "signal": "Нет сигналов",
-        "direction": "—",
-        "description": "Условия стратегии пока не выполнены во всех инструментах."
-    }
+def analyze_strategy(candles):
 
-    # 2. Перебираем инструменты в поисках первого активного сигнала
-    for item in results:
-        strategy = item.get("strategy", {})
-        signal = strategy.get("signal")
+    if len(candles) < 8:
+        return {
+            "signal": "Нет сигналов",
+            "direction": "—",
+            "description": "Недостаточно свечей"
+        }
 
-        if signal in ("LONG", "SHORT"):
-            last_signal = strategy
-            break  # Нашли сигнал — сохраняем его и выходим из цикла
+    last = candles[-8:]
 
-    return {
-        "updated": datetime.now(timezone.utc).isoformat(),
-        "futures": results,
-        "last_signal": last_signal
-    }
-
+    highs = [x["high"] for x in last]
+    lows = [x["low"] for x in last]
+    closes = [x["close"] for x in last]
 
     # ========================================================
     # SHORT
-    #
-    # Последовательные максимумы выше предыдущих,
-    # затем два снижения подряд.
     # ========================================================
-
     rising_highs = (
         highs[3] > highs[2]
-        and
-        highs[4] > highs[3]
-        and
-        highs[5] > highs[4]
+        and highs[4] > highs[3]
+        and highs[5] > highs[4]
     )
 
     falling = (
         closes[-1] < closes[-2]
-        and
-        closes[-2] < closes[-3]
+        and closes[-2] < closes[-3]
     )
 
-    if (
-        rising_highs
-        and
-        falling
-    ):
-
+    if rising_highs and falling:
         return {
-            "signal":
-                "SHORT",
-
-            "direction":
-                "ВНИЗ",
-
-            "description":
-                "Обнаружена последовательность "
-                "повышающихся максимумов с "
-                "последующим снижением."
+            "signal": "SHORT",
+            "direction": "ВНИЗ",
+            "description": "Обнаружена последовательность повышающихся максимумов с последующим снижением."
         }
 
     # ========================================================
     # LONG
-    #
-    # Последовательные минимумы ниже предыдущих,
-    # затем два роста подряд.
     # ========================================================
-
     falling_lows = (
         lows[3] < lows[2]
-        and
-        lows[4] < lows[3]
-        and
-        lows[5] < lows[4]
+        and lows[4] < lows[3]
+        and lows[5] < lows[4]
     )
 
     rising = (
         closes[-1] > closes[-2]
-        and
-        closes[-2] > closes[-3]
+        and closes[-2] > closes[-3]
     )
 
-    if (
-        falling_lows
-        and
-        rising
-    ):
-
+    if falling_lows and rising:
         return {
-            "signal":
-                "LONG",
-
-            "direction":
-                "ВВЕРХ",
-
-            "description":
-                "Обнаружена последовательность "
-                "понижающихся минимумов с "
-                "последующим ростом."
+            "signal": "LONG",
+            "direction": "ВВЕРХ",
+            "description": "Обнаружена последовательность понижающихся минимумов с последующим ростом."
         }
 
     return {
-        "signal":
-            "Нет сигналов",
-
-        "direction":
-            "—",
-
-        "description":
-            "Условия стратегии пока не выполнены."
+        "signal": "Нет сигналов",
+        "direction": "—",
+        "description": "Условия стратегии пока не выполнены."
     }
 
 
@@ -1069,132 +1018,53 @@ def normalize_candles(candles):
 # СТАТУС ОДНОГО ФЬЮЧЕРСА
 # ============================================================
 
-def get_future_status(
-    prefix,
-    title,
-    emoji
-):
+def get_future_status(prefix, title, emoji):
 
     result = {
-
-        "prefix":
-            prefix,
-
-        "title":
-            title,
-
-        "emoji":
-            emoji,
-
-        "status":
-            "Ошибка",
-
-        "message":
-            "",
-
-        "ticker":
-            "",
-
-        "uid":
-            "",
-
-        "candles":
-            0,
-
-        "strategy":
-            {
-                "signal":
-                    "Нет сигналов",
-
-                "direction":
-                    "—",
-
-                "description":
-                    ""
-            }
+        "prefix": prefix,
+        "title": title,
+        "emoji": emoji,
+        "status": "Ошибка",
+        "message": "",
+        "ticker": "",
+        "uid": "",
+        "candles": 0,
+        "strategy": {
+            "signal": "Нет сигналов",
+            "direction": "—",
+            "description": ""
+        }
     }
 
     try:
-
-        future = find_active_future(
-            prefix
-        )
+        future = find_active_future(prefix)
 
         if not future:
-
-            result["status"] = (
-                "Не найден"
-            )
-
-            result["message"] = (
-                "Актуальный контракт "
-                "не найден."
-            )
-
+            result["status"] = "Не найден"
+            result["message"] = "Актуальный контракт не найден."
             return result
 
-        result["ticker"] = (
-            future["ticker"]
-        )
+        result["ticker"] = future["ticker"]
+        result["uid"] = future["instrument_uid"]
 
-        result["uid"] = (
-            future["instrument_uid"]
-        )
-
-        candles_raw = get_candles(
-            future["instrument_uid"]
-        )
-
-        candles = normalize_candles(
-            candles_raw
-        )
-
-        result["candles"] = (
-            len(candles)
-        )
+        candles_raw = get_candles(future["instrument_uid"])
+        candles = normalize_candles(candles_raw)
+        result["candles"] = len(candles)
 
         if not candles:
-
-            result["status"] = (
-                "Нет свечей"
-            )
-
-            result["message"] = (
-                "Фьючерс найден, "
-                "но свечи не получены."
-            )
-
+            result["status"] = "Нет свечей"
+            result["message"] = "Фьючерс найден, но свечи не получены."
             return result
 
         result["status"] = "OK"
-
-        result["message"] = (
-            "Данные получены"
-        )
-
-        result["strategy"] = (
-            analyze_strategy(
-                candles
-            )
-        )
-
+        result["message"] = "Данные получены"
+        result["strategy"] = analyze_strategy(candles)
         return result
 
     except Exception as e:
-
-        log.exception(
-            "Ошибка обработки %s",
-            prefix
-        )
-
-        result["status"] = (
-            "Ошибка"
-        )
-
-        result["message"] = (
-            str(e)
-        )
-
+        log.exception("Ошибка обработки %s", prefix)
+        result["status"] = "Ошибка"
+        result["message"] = str(e)
         return result
 
 
@@ -1206,90 +1076,36 @@ def collect_data():
 
     results = []
 
-    # --------------------------------------------------------
     # ЮАНЬ
-    # --------------------------------------------------------
+    results.append(get_future_status("CR", "ФЬЮЧЕРС ЮАНЬ (CNY)", "🇨🇳"))
 
-    results.append(
-        get_future_status(
-            "CR",
-            "ФЬЮЧЕРС ЮАНЬ (CNY)",
-            "🇨🇳"
-        )
-    )
-
-    # --------------------------------------------------------
     # ЗОЛОТО
-    # --------------------------------------------------------
+    results.append(get_future_status("GD", "ФЬЮЧЕРС ЗОЛОТО (GOLD)", "🏆"))
 
-    results.append(
-        get_future_status(
-            "GD",
-            "ФЬЮЧЕРС ЗОЛОТО (GOLD)",
-            "🏆"
-        )
-    )
-
-    # --------------------------------------------------------
     # НЕФТЬ
-    # --------------------------------------------------------
-
-    results.append(
-        get_future_status(
-            "BR",
-            "ФЬЮЧЕРС НЕФТЬ (BRENT)",
-            "🛢️"
-        )
-    )
+    results.append(get_future_status("BR", "ФЬЮЧЕРС НЕФТЬ (BRENT)", "🛢️"))
 
     # --------------------------------------------------------
-    # ИЩЕМ ПОСЛЕДНИЙ СИГНАЛ
+    # ИЩЕМ ПОСЛЕДНИЙ СИГНАЛ (ИСПРАВЛЕНО)
     # --------------------------------------------------------
-
     last_signal = {
-
-        "signal":
-            "Нет сигналов",
-
-        "direction":
-            "—",
-
-        "description":
-            "Ожидание данных..."
+        "signal": "Нет сигналов",
+        "direction": "—",
+        "description": "Условия стратегии пока не выполнены во всех инструментах."
     }
 
     for item in results:
+        strategy = item.get("strategy", {})
+        signal = strategy.get("signal")
 
-        strategy = item.get(
-            "strategy",
-            {}
-        )
-
-        signal = strategy.get(
-            "signal"
-        )
-
-        if signal in (
-            "LONG",
-            "SHORT"
-        ):
-
+        if signal in ("LONG", "SHORT"):
             last_signal = strategy
-
             break
 
     return {
-
-        "updated":
-            datetime.now(
-                timezone.utc
-            ).isoformat(),
-
-        "futures":
-            results,
-
-        "last_signal":
-            last_signal
+        "updated": datetime.now(timezone.utc).isoformat(),
+        "futures": results,
+        "last_signal": last_signal
     }
 
 
