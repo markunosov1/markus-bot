@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import logging
 import threading
@@ -19,58 +20,67 @@ APP_NAME = "Markus Trade"
 
 API_BASE = "https://invest-public-api.tbank.ru/rest"
 
-# Эндпоинт для поиска конкретного инструмента (например, по тикеру "CR")
 FIND_INSTRUMENT_URL = (
-    API_BASE
-    + "/tinkoff.public.invest.api.contract.v1."
-    "InstrumentsService/FindInstrument"
+    API_BASE +
+    "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
 )
 
-# Эндпоинт для получения списка всех фьючерсов
 FUTURES_URL = (
-    API_BASE
-    + "/tinkoff.public.invest.api.contract.v1."
-    "InstrumentsService/Futures"
+    API_BASE +
+    "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
 )
 
-# Эндпоинт для запроса исторических свечей
 CANDLES_URL = (
-    API_BASE
-    + "/tinkoff.public.invest.api.contract.v1."
-    "MarketDataService/GetCandles"
+    API_BASE +
+    "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles"
 )
+
+
+# ============================================================
+# НАСТРОЙКИ
+# ============================================================
 
 REQUEST_TIMEOUT = 30
 
-# 15-минутные свечи
+# Таймфрейм
 CANDLE_INTERVAL = "CANDLE_INTERVAL_15_MIN"
 
-# История для анализа (в часах за неделю)
-HISTORY_HOURS = 24 * 7
+# Сколько часов свечей загружать
+HISTORY_HOURS = 24 * 30
 
+# Как часто обновлять данные
+UPDATE_SECONDS = 300
+
+# ============================================================
+# ТОРГОВЫЕ НАСТРОЙКИ
+# ============================================================
+
+# Размер одной виртуальной сделки
+POSITION_SIZE_RUBLES = 100000.0
+
+# Комиссия при покупке
+BUY_COMMISSION_PERCENT = 0.10
+
+# Комиссия при продаже
+SELL_COMMISSION_PERCENT = 0.10
+
+# Налог
+TAX_PERCENT = 13.0
+
+
+# Файл истории
+HISTORY_FILE = "trade_history.json"
 
 
 # ============================================================
-# SSL
+# ОТКЛЮЧАЕМ ЛИШНИЕ SSL WARNING
 # ============================================================
 
-# У тебя была ошибка:
-#
-# SSLCertVerificationError
-# self-signed certificate in certificate chain
-#
-# Поэтому временно отключаем проверку сертификата.
-# После того как API заработает, сделаем нормальную
-# проверку сертификата.
-#
 urllib3.disable_warnings(
     urllib3.exceptions.InsecureRequestWarning
 )
 
-warnings.filterwarnings(
-    "ignore",
-    message="Unverified HTTPS request"
-)
+warnings.filterwarnings("ignore")
 
 
 # ============================================================
@@ -93,7 +103,7 @@ app = Flask(__name__)
 
 
 # ============================================================
-# ПОЛУЧЕНИЕ ТОКЕНА
+# ПОЛУЧЕНИЕ TOKEN
 # ============================================================
 
 def get_token():
@@ -103,7 +113,7 @@ def get_token():
         "TINVEST_TOKEN",
         "T_BANK_TOKEN",
         "API_TOKEN",
-        "TOKEN",
+        "TOKEN"
     ]
 
     for name in possible_names:
@@ -127,7 +137,7 @@ def get_token():
 
 
 # ============================================================
-# ОБЩИЙ POST ЗАПРОС
+# API POST
 # ============================================================
 
 def api_post(url, payload):
@@ -135,21 +145,14 @@ def api_post(url, payload):
     token = get_token()
 
     if not token:
-
         raise RuntimeError(
-            "API-токен не найден. "
-            "Проверь переменную с токеном."
+            "API-токен не найден. Проверь переменную TINKOFF_TOKEN."
         )
 
     headers = {
         "Authorization": "Bearer " + token,
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
-
-    log.info(
-        "Запрос: %s",
-        url
-    )
 
     response = requests.post(
         url,
@@ -159,18 +162,10 @@ def api_post(url, payload):
         verify=False
     )
 
-    log.info(
-        "Ответ HTTP: %s",
-        response.status_code
-    )
-
     if response.status_code != 200:
 
         raise RuntimeError(
-            "HTTP "
-            + str(response.status_code)
-            + ": "
-            + response.text[:2000]
+            f"HTTP {response.status_code}: {response.text[:1000]}"
         )
 
     try:
@@ -180,8 +175,7 @@ def api_post(url, payload):
     except Exception:
 
         raise RuntimeError(
-            "API вернул не JSON:\n"
-            + response.text[:2000]
+            "T-Bank вернул ответ, который не удалось прочитать как JSON."
         )
 
 
@@ -191,13 +185,8 @@ def api_post(url, payload):
 
 def get_all_futures():
 
-    log.info(
-        "Получаю список фьючерсов..."
-    )
-
     payload = {
-        "instrumentStatus":
-            "INSTRUMENT_STATUS_BASE"
+        "instrumentStatus": "INSTRUMENT_STATUS_BASE"
     }
 
     try:
@@ -207,20 +196,10 @@ def get_all_futures():
             payload
         )
 
-    except Exception as e:
-
-        # Некоторые конфигурации API могут не принять
-        # фильтр INSTRUMENT_STATUS_BASE.
-        # Тогда пробуем ALL.
-
-        log.warning(
-            "Первый запрос Futures не прошёл: %s",
-            e
-        )
+    except Exception:
 
         payload = {
-            "instrumentStatus":
-                "INSTRUMENT_STATUS_ALL"
+            "instrumentStatus": "INSTRUMENT_STATUS_ALL"
         }
 
         data = api_post(
@@ -233,23 +212,14 @@ def get_all_futures():
         []
     )
 
-    if not isinstance(
-        futures,
-        list
-    ):
-
+    if not isinstance(futures, list):
         futures = []
-
-    log.info(
-        "Получено фьючерсов: %s",
-        len(futures)
-    )
 
     return futures
 
 
 # ============================================================
-# БЕЗОПАСНОЕ ПОЛУЧЕНИЕ СТРОКИ
+# ПОЛУЧЕНИЕ СТРОКИ
 # ============================================================
 
 def get_string(obj, key):
@@ -259,11 +229,11 @@ def get_string(obj, key):
     if value is None:
         return ""
 
-    return str(value).strip()
+    return str(value)
 
 
 # ============================================================
-# ДАТА
+# ПАРСИНГ ДАТЫ
 # ============================================================
 
 def parse_date(value):
@@ -273,12 +243,19 @@ def parse_date(value):
 
     try:
 
-        return datetime.fromisoformat(
-            str(value).replace(
-                "Z",
-                "+00:00"
+        text = str(value)
+
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+
+        dt = datetime.fromisoformat(text)
+
+        if dt.tzinfo is None:
+            dt = dt.replace(
+                tzinfo=timezone.utc
             )
-        )
+
+        return dt
 
     except Exception:
 
@@ -286,12 +263,10 @@ def parse_date(value):
 
 
 # ============================================================
-# ОПРЕДЕЛЕНИЕ ФЬЮЧЕРСА
+# ПРОВЕРКА ФЬЮЧЕРСА
 # ============================================================
 
 def matches_future(future, prefix):
-
-    prefix = prefix.upper()
 
     ticker = get_string(
         future,
@@ -308,21 +283,24 @@ def matches_future(future, prefix):
         "basicAsset"
     ).upper()
 
-    # --------------------------------------------------------
-    # Сначала ищем непосредственно по тикеру
-    # --------------------------------------------------------
+    text = " ".join(
+        [
+            ticker,
+            name,
+            basic_asset
+        ]
+    )
 
-    if ticker.startswith(prefix):
+    prefix = prefix.upper()
 
-        return True
-
-    # --------------------------------------------------------
+    # -------------------------
     # ЮАНЬ
-    # --------------------------------------------------------
+    # -------------------------
 
     if prefix == "CR":
 
-        words = [
+        keywords = [
+            "CR",
             "CNY",
             "YUAN",
             "CNH",
@@ -330,85 +308,57 @@ def matches_future(future, prefix):
             "КИТАЙ"
         ]
 
-        for word in words:
+        return any(
+            word in text
+            for word in keywords
+        )
 
-            if word in ticker:
-                return True
-
-            if word in name:
-                return True
-
-            if word in basic_asset:
-                return True
-
-    # --------------------------------------------------------
+    # -------------------------
     # ЗОЛОТО
-    # --------------------------------------------------------
+    # -------------------------
 
     if prefix == "GD":
 
-        words = [
+        keywords = [
+            "GD",
             "GOLD",
             "ЗОЛОТ"
         ]
 
-        for word in words:
+        return any(
+            word in text
+            for word in keywords
+        )
 
-            if word in ticker:
-                return True
-
-            if word in name:
-                return True
-
-            if word in basic_asset:
-                return True
-
-    # --------------------------------------------------------
-    # BRENT
-    # --------------------------------------------------------
+    # -------------------------
+    # НЕФТЬ
+    # -------------------------
 
     if prefix == "BR":
 
-        words = [
+        keywords = [
+            "BR",
             "BRENT",
-            "БРЕНТ"
+            "НЕФТ"
         ]
 
-        for word in words:
-
-            if word in ticker:
-                return True
-
-            if word in name:
-                return True
-
-            if word in basic_asset:
-                return True
+        return any(
+            word in text
+            for word in keywords
+        )
 
     return False
 
 
 # ============================================================
-# ПОИСК АКТИВНОГО КОНТРАКТА
+# ПОИСК АКТУАЛЬНОГО ФЬЮЧЕРСА
 # ============================================================
 
 def find_active_future(prefix):
 
-    log.info(
-        "======================================"
-    )
-
-    log.info(
-        "Ищу фьючерс через FindInstrument: %s",
+    queries = [
         prefix
-    )
-
-    # --------------------------------------------------------
-    # Для каждого базового инструмента пробуем несколько
-    # вариантов поиска.
-    # --------------------------------------------------------
-
-    queries = [prefix]
+    ]
 
     if prefix == "CR":
 
@@ -437,25 +387,20 @@ def find_active_future(prefix):
 
     candidates = []
 
-    # --------------------------------------------------------
-    # ПОИСК
-    # --------------------------------------------------------
+    now = datetime.now(
+        timezone.utc
+    )
 
     for query in queries:
 
-        payload = {
-            "query": query,
-            "instrumentKind":
-                "INSTRUMENT_TYPE_FUTURES",
-            "apiTradeAvailableFlag": True
-        }
-
-        log.info(
-            "FindInstrument query=%s",
-            query
-        )
-
         try:
+
+            payload = {
+                "query": query,
+                "instrumentKind":
+                    "INSTRUMENT_TYPE_FUTURES",
+                "apiTradeAvailableFlag": True
+            }
 
             data = api_post(
                 FIND_INSTRUMENT_URL,
@@ -465,7 +410,7 @@ def find_active_future(prefix):
         except Exception as e:
 
             log.warning(
-                "Ошибка поиска %s: %s",
+                "Ошибка FindInstrument %s: %s",
                 query,
                 e
             )
@@ -481,187 +426,78 @@ def find_active_future(prefix):
             instruments,
             list
         ):
-
-            instruments = []
-
-        log.info(
-            "FindInstrument %s -> найдено: %s",
-            query,
-            len(instruments)
-        )
-
-        # ----------------------------------------------------
-        # РАЗБИРАЕМ НАЙДЕННЫЕ ИНСТРУМЕНТЫ
-        # ----------------------------------------------------
+            continue
 
         for item in instruments:
 
-            ticker = str(
-                item.get(
-                    "ticker",
-                    ""
-                )
-            ).strip()
-
-            name = str(
-                item.get(
-                    "name",
-                    ""
-                )
-            ).strip()
-
-            uid = str(
-                item.get(
-                    "uid",
-                    ""
-                )
-            ).strip()
-
-            instrument_uid = str(
-                item.get(
-                    "instrumentUid",
-                    ""
-                )
-            ).strip()
-
-            if not instrument_uid:
-
-                instrument_uid = uid
-
-            if not instrument_uid:
-
+            if not isinstance(
+                item,
+                dict
+            ):
                 continue
 
-            # ------------------------------------------------
-            # ПРОВЕРЯЕМ СООТВЕТСТВИЕ
-            # ------------------------------------------------
-
-            text = (
-                ticker
-                + " "
-                + name
-            ).upper()
-
-            matched = False
-
-            if prefix == "CR":
-
-                if (
-                    ticker.upper().startswith("CR")
-                    or
-                    "CNY" in text
-                    or
-                    "ЮАН" in text
-                    or
-                    "КИТАЙ" in text
-                ):
-
-                    matched = True
-
-            elif prefix == "GD":
-
-                if (
-                    ticker.upper().startswith("GD")
-                    or
-                    "GOLD" in text
-                    or
-                    "ЗОЛОТ" in text
-                ):
-
-                    matched = True
-
-            elif prefix == "BR":
-
-                if (
-                    ticker.upper().startswith("BR")
-                    or
-                    "BRENT" in text
-                    or
-                    "БРЕНТ" in text
-                ):
-
-                    matched = True
-
-            if not matched:
-
+            if not matches_future(
+                item,
+                prefix
+            ):
                 continue
 
-            # ------------------------------------------------
-            # ДАТЫ
-            # ------------------------------------------------
+            instrument_uid = (
+                item.get("instrumentUid")
+                or item.get("uid")
+            )
+
+            if not instrument_uid:
+                continue
+
+            ticker = get_string(
+                item,
+                "ticker"
+            )
+
+            name = get_string(
+                item,
+                "name"
+            )
 
             first_trade = parse_date(
-                item.get(
-                    "firstTradeDate"
-                )
+                item.get("firstTradeDate")
             )
 
             last_trade = parse_date(
-                item.get(
-                    "lastTradeDate"
-                )
+                item.get("lastTradeDate")
             )
 
-            now = datetime.now(
-                timezone.utc
-            )
+            # Еще не начался
+            if first_trade and now < first_trade:
+                continue
 
-            # Контракт ещё не начал торговаться
-            if first_trade:
-
-                if first_trade > now:
-
-                    continue
-
-            # Контракт уже закончился
-            if last_trade:
-
-                if last_trade < now:
-
-                    continue
+            # Уже закончился
+            if last_trade and now > last_trade:
+                continue
 
             candidates.append(
                 {
-                    "ticker":
-                        ticker,
-
-                    "name":
-                        name,
-
-                    "uid":
-                        uid,
-
-                    "instrument_uid":
-                        instrument_uid,
-
-                    "first_trade":
-                        first_trade,
-
-                    "last_trade":
-                        last_trade,
-
+                    "ticker": ticker,
+                    "name": name,
+                    "uid": instrument_uid,
+                    "instrument_uid": instrument_uid,
+                    "first_trade": first_trade,
+                    "last_trade": last_trade,
                     "class_code":
-                        str(
-                            item.get(
-                                "classCode",
-                                ""
-                            )
+                        get_string(
+                            item,
+                            "classCode"
                         ),
-
                     "basic_asset":
-                        str(
-                            item.get(
-                                "basicAsset",
-                                ""
-                            )
+                        get_string(
+                            item,
+                            "basicAsset"
                         )
                 }
             )
 
-    # --------------------------------------------------------
-    # УДАЛЯЕМ ДУБЛИКАТЫ
-    # --------------------------------------------------------
-
+    # Убираем дубликаты
     unique = {}
 
     for item in candidates:
@@ -674,40 +510,19 @@ def find_active_future(prefix):
         unique.values()
     )
 
-    # --------------------------------------------------------
-    # НИЧЕГО НЕ НАШЛИ
-    # --------------------------------------------------------
-
     if not candidates:
-
-        log.error(
-            "======================================"
-        )
-
-        log.error(
-            "ФЬЮЧЕРС %s НЕ НАЙДЕН",
-            prefix
-        )
-
-        log.error(
-            "======================================"
-        )
 
         return None
 
-    # --------------------------------------------------------
-    # СОРТИРУЕМ ПО БЛИЖАЙШЕЙ ЭКСПИРАЦИИ
-    # --------------------------------------------------------
-
+    # Сначала выбираем ближайший срок окончания
     def expiry_key(item):
 
-        date = item.get(
+        dt = item.get(
             "last_trade"
         )
 
-        if date:
-
-            return date
+        if dt:
+            return dt
 
         return datetime.max.replace(
             tzinfo=timezone.utc
@@ -717,66 +532,14 @@ def find_active_future(prefix):
         key=expiry_key
     )
 
-    # --------------------------------------------------------
-    # ВЫБИРАЕМ БЛИЖАЙШИЙ АКТУАЛЬНЫЙ
-    # --------------------------------------------------------
-
     selected = candidates[0]
 
     log.info(
-        "======================================"
-    )
-
-    log.info(
-        "АКТУАЛЬНЫЙ ФЬЮЧЕРС НАЙДЕН"
-    )
-
-    log.info(
-        "Тикер: %s",
-        selected["ticker"]
-    )
-
-    log.info(
-        "Название: %s",
-        selected["name"]
-    )
-
-    log.info(
-        "UID: %s",
+        "Выбран фьючерс %s | %s | UID=%s",
+        selected["ticker"],
+        selected["name"],
         selected["instrument_uid"]
     )
-
-    log.info(
-        "ClassCode: %s",
-        selected["class_code"]
-    )
-
-    log.info(
-        "Экспирация: %s",
-        selected["last_trade"]
-    )
-
-    log.info(
-        "======================================"
-    )
-
-    # --------------------------------------------------------
-    # ПОКАЗЫВАЕМ ВСЕ НАЙДЕННЫЕ КОНТРАКТЫ В ЛОГЕ
-    # --------------------------------------------------------
-
-    log.info(
-        "Всего подходящих контрактов: %s",
-        len(candidates)
-    )
-
-    for item in candidates:
-
-        log.info(
-            "Кандидат: %s | UID=%s | expiry=%s",
-            item["ticker"],
-            item["instrument_uid"],
-            item["last_trade"]
-        )
 
     return selected
 
@@ -792,8 +555,8 @@ def get_candles(instrument_uid):
     )
 
     start = (
-        now
-        - timedelta(
+        now -
+        timedelta(
             hours=HISTORY_HOURS
         )
     )
@@ -801,18 +564,11 @@ def get_candles(instrument_uid):
     payload = {
         "from": start.isoformat(),
         "to": now.isoformat(),
-        "interval":
-            CANDLE_INTERVAL,
-        "instrumentId":
-            instrument_uid,
+        "interval": CANDLE_INTERVAL,
+        "instrumentId": instrument_uid,
         "candleSourceType":
             "CANDLE_SOURCE_EXCHANGE"
     }
-
-    log.info(
-        "Запрашиваю свечи для UID: %s",
-        instrument_uid
-    )
 
     data = api_post(
         CANDLES_URL,
@@ -828,32 +584,24 @@ def get_candles(instrument_uid):
         candles,
         list
     ):
-
-        candles = []
-
-    log.info(
-        "Получено свечей: %s",
-        len(candles)
-    )
+        return []
 
     return candles
 
 
 # ============================================================
-# QUOTATION → ЧИСЛО
+# QUOTATION -> FLOAT
 # ============================================================
 
 def quotation_to_float(value):
 
     if value is None:
-
         return 0.0
 
     if isinstance(
         value,
         (int, float)
     ):
-
         return float(value)
 
     if isinstance(
@@ -876,8 +624,7 @@ def quotation_to_float(value):
             return (
                 float(units)
                 +
-                float(nano)
-                / 1_000_000_000
+                float(nano) / 1_000_000_000
             )
 
         except Exception:
@@ -886,7 +633,9 @@ def quotation_to_float(value):
 
     try:
 
-        return float(value)
+        return float(
+            str(value)
+        )
 
     except Exception:
 
@@ -903,44 +652,55 @@ def normalize_candles(candles):
 
     for candle in candles:
 
-        result.append(
-            {
-                "time":
-                    candle.get("time"),
+        if not isinstance(
+            candle,
+            dict
+        ):
+            continue
 
-                "open":
-                    quotation_to_float(
-                        candle.get("open")
-                    ),
-
-                "high":
-                    quotation_to_float(
-                        candle.get("high")
-                    ),
-
-                "low":
-                    quotation_to_float(
-                        candle.get("low")
-                    ),
-
-                "close":
-                    quotation_to_float(
-                        candle.get("close")
-                    ),
-
-                "volume":
-                    int(
-                        candle.get(
-                            "volume",
-                            0
-                        ) or 0
-                    )
-            }
+        dt = parse_date(
+            candle.get("time")
         )
 
+        if not dt:
+            continue
+
+        item = {
+            "time": dt.isoformat(),
+
+            "open":
+                quotation_to_float(
+                    candle.get("open")
+                ),
+
+            "high":
+                quotation_to_float(
+                    candle.get("high")
+                ),
+
+            "low":
+                quotation_to_float(
+                    candle.get("low")
+                ),
+
+            "close":
+                quotation_to_float(
+                    candle.get("close")
+                ),
+
+            "volume":
+                quotation_to_float(
+                    candle.get("volume")
+                )
+        }
+
+        if item["close"] <= 0:
+            continue
+
+        result.append(item)
+
     result.sort(
-        key=lambda x:
-            x.get("time") or ""
+        key=lambda x: x["time"]
     )
 
     return result
@@ -953,72 +713,640 @@ def normalize_candles(candles):
 def analyze_strategy(candles):
 
     if len(candles) < 8:
+
         return {
             "signal": "Нет сигналов",
             "direction": "—",
-            "description": "Недостаточно свечей"
+            "description":
+                "Недостаточно свечей"
         }
 
     last = candles[-8:]
 
-    highs = [x["high"] for x in last]
-    lows = [x["low"] for x in last]
-    closes = [x["close"] for x in last]
+    highs = [
+        x["high"]
+        for x in last
+    ]
+
+    lows = [
+        x["low"]
+        for x in last
+    ]
+
+    closes = [
+        x["close"]
+        for x in last
+    ]
 
     # ========================================================
     # SHORT
+    #
+    # Последовательные максимумы растут:
+    #
+    # H3 > H2
+    # H4 > H3
+    # H5 > H4
+    #
+    # Затем три снижающихся закрытия
     # ========================================================
-    rising_highs = (
+
+    short_pattern = (
         highs[3] > highs[2]
-        and highs[4] > highs[3]
-        and highs[5] > highs[4]
-    )
-
-    falling = (
+        and
+        highs[4] > highs[3]
+        and
+        highs[5] > highs[4]
+        and
         closes[-1] < closes[-2]
-        and closes[-2] < closes[-3]
+        and
+        closes[-2] < closes[-3]
     )
-
-    if rising_highs and falling:
-        return {
-            "signal": "SHORT",
-            "direction": "ВНИЗ",
-            "description": "Обнаружена последовательность повышающихся максимумов с последующим снижением."
-        }
 
     # ========================================================
     # LONG
+    #
+    # Последовательные минимумы снижаются:
+    #
+    # L3 < L2
+    # L4 < L3
+    # L5 < L4
+    #
+    # Затем три повышающихся закрытия
     # ========================================================
-    falling_lows = (
+
+    long_pattern = (
         lows[3] < lows[2]
-        and lows[4] < lows[3]
-        and lows[5] < lows[4]
-    )
-
-    rising = (
+        and
+        lows[4] < lows[3]
+        and
+        lows[5] < lows[4]
+        and
         closes[-1] > closes[-2]
-        and closes[-2] > closes[-3]
+        and
+        closes[-2] > closes[-3]
     )
 
-    if falling_lows and rising:
+    if short_pattern:
+
+        return {
+            "signal": "SHORT",
+            "direction": "Вниз",
+            "description":
+                "Сформирован SHORT-сигнал"
+        }
+
+    if long_pattern:
+
         return {
             "signal": "LONG",
-            "direction": "ВВЕРХ",
-            "description": "Обнаружена последовательность понижающихся минимумов с последующим ростом."
+            "direction": "Вверх",
+            "description":
+                "Сформирован LONG-сигнал"
         }
 
     return {
         "signal": "Нет сигналов",
         "direction": "—",
-        "description": "Условия стратегии пока не выполнены."
+        "description":
+            "Сигнал не сформирован"
     }
 
 
 # ============================================================
-# СТАТУС ОДНОГО ФЬЮЧЕРСА
+# ИСТОРИЯ
 # ============================================================
 
-def get_future_status(prefix, title, emoji):
+def load_history():
+
+    if not os.path.exists(
+        HISTORY_FILE
+    ):
+
+        return []
+
+    try:
+
+        with open(
+            HISTORY_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            data = json.load(f)
+
+        if isinstance(
+            data,
+            list
+        ):
+
+            return data
+
+    except Exception as e:
+
+        log.warning(
+            "Ошибка чтения истории: %s",
+            e
+        )
+
+    return []
+
+
+def save_history(history):
+
+    try:
+
+        with open(
+            HISTORY_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            json.dump(
+                history,
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
+
+    except Exception as e:
+
+        log.error(
+            "Ошибка сохранения истории: %s",
+            e
+        )
+
+
+# ============================================================
+# РАСЧЕТ КОМИССИИ
+# ============================================================
+
+def calculate_commission(
+    amount,
+    percent
+):
+
+    return (
+        amount *
+        percent /
+        100.0
+    )
+
+
+# ============================================================
+# РАСЧЕТ СДЕЛКИ
+# ============================================================
+
+def calculate_trade_result(
+    direction,
+    entry_price,
+    exit_price
+):
+
+    if entry_price <= 0:
+        return None
+
+    # --------------------------------------------------------
+    # Доходность
+    # --------------------------------------------------------
+
+    if direction == "LONG":
+
+        price_change_percent = (
+            (
+                exit_price -
+                entry_price
+            )
+            /
+            entry_price
+        ) * 100
+
+    else:
+
+        price_change_percent = (
+            (
+                entry_price -
+                exit_price
+            )
+            /
+            entry_price
+        ) * 100
+
+    # --------------------------------------------------------
+    # Результат до расходов
+    # --------------------------------------------------------
+
+    gross_result = (
+        POSITION_SIZE_RUBLES *
+        price_change_percent /
+        100.0
+    )
+
+    # --------------------------------------------------------
+    # Комиссия при входе
+    # --------------------------------------------------------
+
+    buy_commission = calculate_commission(
+        POSITION_SIZE_RUBLES,
+        BUY_COMMISSION_PERCENT
+    )
+
+    # --------------------------------------------------------
+    # Комиссия при выходе
+    # --------------------------------------------------------
+
+    exit_amount = (
+        POSITION_SIZE_RUBLES
+        *
+        (
+            exit_price /
+            entry_price
+        )
+    )
+
+    sell_commission = calculate_commission(
+        abs(exit_amount),
+        SELL_COMMISSION_PERCENT
+    )
+
+    # --------------------------------------------------------
+    # НАЛОГ
+    #
+    # По заданному тобой правилу:
+    # 13% только если сделка прибыльная.
+    # --------------------------------------------------------
+
+    if gross_result > 0:
+
+        tax = (
+            gross_result *
+            TAX_PERCENT /
+            100.0
+        )
+
+    else:
+
+        tax = 0.0
+
+    # --------------------------------------------------------
+    # ЧИСТЫЙ РЕЗУЛЬТАТ
+    # --------------------------------------------------------
+
+    net_result = (
+        gross_result
+        -
+        buy_commission
+        -
+        sell_commission
+        -
+        tax
+    )
+
+    return {
+        "price_change_percent":
+            round(
+                price_change_percent,
+                4
+            ),
+
+        "gross_result":
+            round(
+                gross_result,
+                2
+            ),
+
+        "buy_commission":
+            round(
+                buy_commission,
+                2
+            ),
+
+        "sell_commission":
+            round(
+                sell_commission,
+                2
+            ),
+
+        "tax":
+            round(
+                tax,
+                2
+            ),
+
+        "net_result":
+            round(
+                net_result,
+                2
+            )
+    }
+
+
+# ============================================================
+# ПОСТРОЕНИЕ ИСТОРИИ СТРАТЕГИИ
+#
+# ВХОД:
+# LONG / SHORT
+#
+# ВЫХОД:
+# противоположный сигнал
+# ============================================================
+
+def build_strategy_history(
+    candles,
+    instrument,
+    title
+):
+
+    if len(candles) < 8:
+
+        return [], None
+
+    trades = []
+
+    current_position = None
+
+    # Последний индекс свечи
+    for i in range(
+        7,
+        len(candles)
+    ):
+
+        window = candles[
+            i - 7:i + 1
+        ]
+
+        analysis = analyze_strategy(
+            window
+        )
+
+        signal = analysis[
+            "signal"
+        ]
+
+        candle = candles[i]
+
+        price = candle[
+            "close"
+        ]
+
+        candle_time = candle[
+            "time"
+        ]
+
+        # ----------------------------------------------------
+        # Если позиции нет
+        # ----------------------------------------------------
+
+        if current_position is None:
+
+            if signal in (
+                "LONG",
+                "SHORT"
+            ):
+
+                current_position = {
+                    "instrument": instrument,
+                    "title": title,
+                    "direction": signal,
+                    "entry_price": price,
+                    "entry_time": candle_time
+                }
+
+            continue
+
+        # ----------------------------------------------------
+        # Если пришел тот же сигнал
+        # Ничего не делаем
+        # ----------------------------------------------------
+
+        if signal == current_position[
+            "direction"
+        ]:
+
+            continue
+
+        # ----------------------------------------------------
+        # Если пришел противоположный сигнал
+        # Закрываем текущую позицию
+        # ----------------------------------------------------
+
+        opposite_signal = (
+            current_position[
+                "direction"
+            ] == "LONG"
+            and
+            signal == "SHORT"
+        ) or (
+            current_position[
+                "direction"
+            ] == "SHORT"
+            and
+            signal == "LONG"
+        )
+
+        if opposite_signal:
+
+            result = calculate_trade_result(
+                current_position[
+                    "direction"
+                ],
+                current_position[
+                    "entry_price"
+                ],
+                price
+            )
+
+            if result is None:
+                current_position = None
+                continue
+
+            trade = {
+                "id":
+                    len(trades) + 1,
+
+                "instrument":
+                    instrument,
+
+                "title":
+                    title,
+
+                "direction":
+                    current_position[
+                        "direction"
+                    ],
+
+                "entry_time":
+                    current_position[
+                        "entry_time"
+                    ],
+
+                "exit_time":
+                    candle_time,
+
+                "entry_price":
+                    round(
+                        current_position[
+                            "entry_price"
+                        ],
+                        8
+                    ),
+
+                "exit_price":
+                    round(
+                        price,
+                        8
+                    ),
+
+                "exit_signal":
+                    signal,
+
+                **result
+            }
+
+            trades.append(
+                trade
+            )
+
+            # ------------------------------------------------
+            # Сразу открываем новую позицию
+            # по противоположному сигналу
+            # ------------------------------------------------
+
+            current_position = {
+                "instrument": instrument,
+                "title": title,
+                "direction": signal,
+                "entry_price": price,
+                "entry_time": candle_time
+            }
+
+    return trades, current_position
+
+
+# ============================================================
+# СТАТИСТИКА
+# ============================================================
+
+def calculate_statistics(
+    trades
+):
+
+    total = len(trades)
+
+    if total == 0:
+
+        return {
+            "total": 0,
+            "profitable": 0,
+            "losing": 0,
+            "winrate": 0,
+            "gross": 0,
+            "commission": 0,
+            "tax": 0,
+            "net": 0
+        }
+
+    profitable = sum(
+        1
+        for trade in trades
+        if trade.get(
+            "net_result",
+            0
+        ) > 0
+    )
+
+    losing = sum(
+        1
+        for trade in trades
+        if trade.get(
+            "net_result",
+            0
+        ) < 0
+    )
+
+    gross = sum(
+        trade.get(
+            "gross_result",
+            0
+        )
+        for trade in trades
+    )
+
+    commission = sum(
+        trade.get(
+            "buy_commission",
+            0
+        )
+        +
+        trade.get(
+            "sell_commission",
+            0
+        )
+        for trade in trades
+    )
+
+    tax = sum(
+        trade.get(
+            "tax",
+            0
+        )
+        for trade in trades
+    )
+
+    net = sum(
+        trade.get(
+            "net_result",
+            0
+        )
+        for trade in trades
+    )
+
+    winrate = (
+        profitable /
+        total *
+        100
+    )
+
+    return {
+        "total": total,
+        "profitable": profitable,
+        "losing": losing,
+        "winrate":
+            round(
+                winrate,
+                2
+            ),
+        "gross":
+            round(
+                gross,
+                2
+            ),
+        "commission":
+            round(
+                commission,
+                2
+            ),
+        "tax":
+            round(
+                tax,
+                2
+            ),
+        "net":
+            round(
+                net,
+                2
+            )
+    }
+
+
+# ============================================================
+# АНАЛИЗ ОДНОГО ФЬЮЧЕРСА
+# ============================================================
+
+def get_future_status(
+    prefix,
+    title,
+    emoji
+):
 
     result = {
         "prefix": prefix,
@@ -1026,86 +1354,288 @@ def get_future_status(prefix, title, emoji):
         "emoji": emoji,
         "status": "Ошибка",
         "message": "",
-        "ticker": "",
-        "uid": "",
+        "ticker": "—",
+        "uid": "—",
         "candles": 0,
         "strategy": {
             "signal": "Нет сигналов",
             "direction": "—",
             "description": ""
-        }
+        },
+        "history": [],
+        "statistics": {},
+        "open_position": None
     }
 
     try:
-        future = find_active_future(prefix)
+
+        future = find_active_future(
+            prefix
+        )
 
         if not future:
-            result["status"] = "Не найден"
-            result["message"] = "Актуальный контракт не найден."
+
+            result["message"] = (
+                "Актуальный контракт не найден"
+            )
+
             return result
 
-        result["ticker"] = future["ticker"]
-        result["uid"] = future["instrument_uid"]
+        result["ticker"] = future[
+            "ticker"
+        ]
 
-        candles_raw = get_candles(future["instrument_uid"])
-        candles = normalize_candles(candles_raw)
-        result["candles"] = len(candles)
+        result["uid"] = future[
+            "instrument_uid"
+        ]
+
+        candles_raw = get_candles(
+            future[
+                "instrument_uid"
+            ]
+        )
+
+        candles = normalize_candles(
+            candles_raw
+        )
+
+        result["candles"] = len(
+            candles
+        )
 
         if not candles:
-            result["status"] = "Нет свечей"
-            result["message"] = "Фьючерс найден, но свечи не получены."
+
+            result["message"] = (
+                "Свечей 0"
+            )
+
             return result
 
+        # ----------------------------------------------------
+        # Текущий сигнал
+        # ----------------------------------------------------
+
+        strategy = analyze_strategy(
+            candles
+        )
+
+        result["strategy"] = strategy
+
         result["status"] = "OK"
-        result["message"] = "Данные получены"
-        result["strategy"] = analyze_strategy(candles)
+
+        result["message"] = (
+            "Данные получены"
+        )
+
+        # ----------------------------------------------------
+        # История стратегии
+        # ----------------------------------------------------
+
+        trades, open_position = (
+            build_strategy_history(
+                candles,
+                prefix,
+                title
+            )
+        )
+
+        result["history"] = trades
+
+        result["open_position"] = (
+            open_position
+        )
+
+        result["statistics"] = (
+            calculate_statistics(
+                trades
+            )
+        )
+
         return result
 
     except Exception as e:
-        log.exception("Ошибка обработки %s", prefix)
-        result["status"] = "Ошибка"
+
+        log.exception(
+            "Ошибка %s",
+            title
+        )
+
         result["message"] = str(e)
+
         return result
 
 
 # ============================================================
-# ВСЕ ИНСТРУМЕНТЫ
+# ОБЩИЙ СБОР ДАННЫХ
 # ============================================================
 
 def collect_data():
 
-    results = []
+    futures = [
+        get_future_status(
+            "CR",
+            "Юань",
+            "¥"
+        ),
 
-    # ЮАНЬ
-    results.append(get_future_status("CR", "ФЬЮЧЕРС ЮАНЬ (CNY)", "🇨🇳"))
+        get_future_status(
+            "GD",
+            "Золото",
+            "🥇"
+        ),
 
-    # ЗОЛОТО
-    results.append(get_future_status("GD", "ФЬЮЧЕРС ЗОЛОТО (GOLD)", "🏆"))
+        get_future_status(
+            "BR",
+            "Нефть Brent",
+            "🛢️"
+        )
+    ]
 
-    # НЕФТЬ
-    results.append(get_future_status("BR", "ФЬЮЧЕРС НЕФТЬ (BRENT)", "🛢️"))
-
-    # --------------------------------------------------------
-    # ИЩЕМ ПОСЛЕДНИЙ СИГНАЛ (ИСПРАВЛЕНО)
-    # --------------------------------------------------------
     last_signal = {
-        "signal": "Нет сигналов",
+        "title": "Нет сигналов",
+        "signal": "—",
         "direction": "—",
-        "description": "Условия стратегии пока не выполнены во всех инструментах."
+        "description": ""
     }
 
-    for item in results:
-        strategy = item.get("strategy", {})
-        signal = strategy.get("signal")
+    # Если есть текущий сигнал,
+    # показываем его
+    for item in futures:
 
-        if signal in ("LONG", "SHORT"):
-            last_signal = strategy
+        signal = item[
+            "strategy"
+        ].get(
+            "signal"
+        )
+
+        if signal in (
+            "LONG",
+            "SHORT"
+        ):
+
+            last_signal = {
+                "title":
+                    item["title"],
+
+                "signal":
+                    signal,
+
+                "direction":
+                    item["strategy"].get(
+                        "direction",
+                        "—"
+                    ),
+
+                "description":
+                    item["strategy"].get(
+                        "description",
+                        ""
+                    )
+            }
+
             break
 
+    # --------------------------------------------------------
+    # Общая статистика
+    # --------------------------------------------------------
+
+    all_trades = []
+
+    for item in futures:
+
+        all_trades.extend(
+            item.get(
+                "history",
+                []
+            )
+        )
+
+    total_statistics = (
+        calculate_statistics(
+            all_trades
+        )
+    )
+
+    # --------------------------------------------------------
+    # Сохраняем историю
+    # --------------------------------------------------------
+
+    # Чтобы файл не разрастался бесконечно,
+    # сохраняем последние 5000 закрытых сделок.
+
+    existing_history = load_history()
+
+    existing_keys = set()
+
+    for trade in existing_history:
+
+        key = (
+            trade.get("instrument"),
+            trade.get("entry_time"),
+            trade.get("exit_time"),
+            trade.get("direction")
+        )
+
+        existing_keys.add(key)
+
+    for trade in all_trades:
+
+        key = (
+            trade.get("instrument"),
+            trade.get("entry_time"),
+            trade.get("exit_time"),
+            trade.get("direction")
+        )
+
+        if key not in existing_keys:
+
+            existing_history.append(
+                trade
+            )
+
+            existing_keys.add(
+                key
+            )
+
+    existing_history = existing_history[
+        -5000:
+    ]
+
+    save_history(
+        existing_history
+    )
+
     return {
-        "updated": datetime.now(timezone.utc).isoformat(),
-        "futures": results,
-        "last_signal": last_signal
+        "updated":
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
+
+        "futures":
+            futures,
+
+        "last_signal":
+            last_signal,
+
+        "statistics":
+            total_statistics,
+
+        "settings": {
+            "position_size":
+                POSITION_SIZE_RUBLES,
+
+            "buy_commission":
+                BUY_COMMISSION_PERCENT,
+
+            "sell_commission":
+                SELL_COMMISSION_PERCENT,
+
+            "tax":
+                TAX_PERCENT,
+
+            "exit_rule":
+                "Противоположный сигнал"
+        }
     }
 
 
@@ -1113,8 +1643,10 @@ def collect_data():
 # API STATUS
 # ============================================================
 
-@app.route("/api/status")
-def status():
+@app.route(
+    "/api/status"
+)
+def api_status():
 
     try:
 
@@ -1130,18 +1662,35 @@ def status():
 
         return jsonify(
             {
-                "error":
-                    str(e)
+                "error": str(e)
             }
         ), 500
+
+
+# ============================================================
+# API HISTORY
+# ============================================================
+
+@app.route(
+    "/api/history"
+)
+def api_history():
+
+    history = load_history()
+
+    return jsonify(
+        {
+            "count": len(history),
+            "history": history
+        }
+    )
 
 
 # ============================================================
 # HTML
 # ============================================================
 
-HTML = """
-
+HTML = r"""
 <!DOCTYPE html>
 
 <html lang="ru">
@@ -1150,11 +1699,8 @@ HTML = """
 
 <meta charset="UTF-8">
 
-<meta
-    name="viewport"
-    content="width=device-width,
-    initial-scale=1.0"
->
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
 
 <title>Markus Trade</title>
 
@@ -1168,184 +1714,331 @@ body {
 
     margin: 0;
 
-    background: #0b0b0b;
+    background:
+        linear-gradient(
+            135deg,
+            #07090d,
+            #10141c
+        );
 
     color: #ffffff;
 
     font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
         Arial,
         sans-serif;
-}
 
-.header {
-
-    padding: 28px 20px 20px;
-
-    text-align: center;
-
-    border-bottom:
-        1px solid #252525;
-}
-
-.header h1 {
-
-    margin: 0;
-
-    font-size: 28px;
-}
-
-.header p {
-
-    margin: 6px 0 0;
-
-    color: #888;
-
+    min-height: 100vh;
 }
 
 .container {
 
-    max-width: 900px;
+    width: 95%;
 
-    margin: auto;
+    max-width: 1400px;
 
-    padding: 20px;
+    margin: 0 auto;
+
+    padding: 25px 0 50px;
+}
+
+.header {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: center;
+
+    margin-bottom: 25px;
+}
+
+.logo {
+
+    font-size: 28px;
+
+    font-weight: 800;
+
+    letter-spacing: 1px;
+}
+
+.logo span {
+
+    color: #d7aa52;
+}
+
+.updated {
+
+    color: #8c96a8;
+
+    font-size: 13px;
+}
+
+.grid {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            3,
+            1fr
+        );
+
+    gap: 18px;
 }
 
 .card {
 
-    background: #1b1b1b;
+    background:
+        rgba(
+            22,
+            27,
+            36,
+            0.95
+        );
 
     border:
-        1px solid #303030;
+        1px solid
+        rgba(
+            255,
+            255,
+            255,
+            0.08
+        );
 
-    border-radius: 24px;
+    border-radius: 18px;
 
-    padding: 24px;
+    padding: 20px;
 
-    margin-bottom: 18px;
+    box-shadow:
+        0 15px 50px
+        rgba(
+            0,
+            0,
+            0,
+            0.25
+        );
 }
 
-.title {
+.card h2 {
 
-    color: #999;
+    margin-top: 0;
 
-    font-size: 17px;
-
-    font-weight: 700;
-
-    letter-spacing: 2px;
-
-    margin-bottom: 20px;
+    font-size: 20px;
 }
 
 .status {
 
-    font-size: 38px;
+    display: inline-block;
 
-    font-weight: 800;
+    padding: 6px 10px;
 
-    margin-bottom: 10px;
-}
+    border-radius: 20px;
 
-.ok {
+    font-size: 12px;
 
-    color: #00ff9d;
+    background: #193d2b;
+
+    color: #66e29a;
 }
 
 .error {
 
-    color: #ff4545;
-}
+    background: #442020;
 
-.warning {
-
-    color: #ffc400;
+    color: #ff8585;
 }
 
 .info {
 
-    color: #00ff9d;
-}
+    margin-top: 15px;
 
-.row {
+    color: #aab3c2;
 
-    margin-top: 12px;
+    font-size: 13px;
 
-    color: #999;
-
-    font-size: 16px;
-
-    word-break: break-word;
-}
-
-.row span {
-
-    color: #ffffff;
+    line-height: 1.6;
 }
 
 .signal {
 
-    border:
-        2px solid #00ff9d;
+    margin-top: 15px;
 
-    border-radius: 24px;
+    padding: 14px;
 
-    padding: 24px;
+    border-radius: 14px;
 
-    background: #171717;
+    background: #111720;
+
+    font-size: 18px;
+
+    font-weight: bold;
 }
 
-.signal-title {
+.long {
 
-    color: #999;
-
-    font-weight: 700;
-
-    letter-spacing: 2px;
-
-    margin-bottom: 18px;
+    color: #52e58a;
 }
 
-.signal-value {
+.short {
 
-    font-size: 23px;
+    color: #ff6666;
+}
 
-    margin: 12px 0;
+.none {
+
+    color: #9ca5b4;
+}
+
+.statistics {
+
+    margin-top: 25px;
+}
+
+.stats-grid {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            4,
+            1fr
+        );
+
+    gap: 12px;
+}
+
+.stat {
+
+    background: #111720;
+
+    padding: 16px;
+
+    border-radius: 14px;
+}
+
+.stat-title {
+
+    font-size: 12px;
+
+    color: #8f99aa;
+
+    margin-bottom: 7px;
+}
+
+.stat-value {
+
+    font-size: 20px;
+
+    font-weight: bold;
+}
+
+.history {
+
+    margin-top: 25px;
+}
+
+.table-wrap {
+
+    overflow-x: auto;
+}
+
+table {
+
+    width: 100%;
+
+    border-collapse: collapse;
+
+    min-width: 900px;
+}
+
+th,
+td {
+
+    padding: 11px;
+
+    border-bottom:
+        1px solid
+        rgba(
+            255,
+            255,
+            255,
+            0.07
+        );
+
+    text-align: left;
+
+    font-size: 13px;
+}
+
+th {
+
+    color: #9ca5b4;
+
+    font-weight: normal;
+}
+
+.positive {
+
+    color: #52e58a;
+
+    font-weight: bold;
+}
+
+.negative {
+
+    color: #ff6666;
+
+    font-weight: bold;
+}
+
+.settings {
+
+    margin-top: 20px;
+
+    color: #858fa0;
+
+    font-size: 13px;
+
+    line-height: 1.7;
 }
 
 button {
 
-    width: 100%;
-
-    margin-top: 18px;
-
-    padding: 16px;
+    margin-top: 20px;
 
     border: none;
 
-    border-radius: 14px;
+    border-radius: 12px;
 
-    background: #00ff9d;
+    padding: 12px 20px;
 
-    color: #000;
+    background: #d7aa52;
 
-    font-size: 17px;
+    color: #111;
 
-    font-weight: 700;
+    font-weight: bold;
+
+    cursor: pointer;
 }
 
-.small {
+@media (
+    max-width: 900px
+) {
 
-    color: #666;
+    .grid {
 
-    text-align: center;
+        grid-template-columns:
+            1fr;
+    }
 
-    margin-top: 15px;
+    .stats-grid {
 
-    font-size: 12px;
+        grid-template-columns:
+            repeat(
+                2,
+                1fr
+            );
+    }
 }
 
 </style>
@@ -1354,56 +2047,595 @@ button {
 
 <body>
 
+<div class="container">
 
-<div class="header">
+    <div class="header">
 
-    <h1>Markus Trade</h1>
+        <div class="logo">
+            MARKUS <span>TRADE</span>
+        </div>
 
-    <p>мини-приложение</p>
-
-</div>
-
-
-<div
-    class="container"
-    id="app"
->
-
-    <div class="card">
-
-        <div class="status info">
+        <div
+            class="updated"
+            id="updated"
+        >
             Загрузка...
         </div>
 
-        <div class="row">
-            Подключение к T-Bank API
+    </div>
+
+
+    <div
+        class="grid"
+        id="futures"
+    >
+
+    </div>
+
+
+    <div class="card statistics">
+
+        <h2>
+            📊 Статистика стратегии
+        </h2>
+
+        <div
+            class="stats-grid"
+            id="statistics"
+        >
         </div>
 
     </div>
+
+
+    <div class="card history">
+
+        <h2>
+            📜 История сделок
+        </h2>
+
+        <div
+            class="table-wrap"
+            id="history"
+        >
+        </div>
+
+    </div>
+
+
+    <div class="card settings">
+
+        <b>Настройки расчёта</b><br>
+
+        Размер виртуальной позиции:
+        <span id="positionSize">—</span> ₽<br>
+
+        Комиссия покупки:
+        <span id="buyCommission">—</span>%<br>
+
+        Комиссия продажи:
+        <span id="sellCommission">—</span>%<br>
+
+        Налог:
+        <span id="tax">—</span>%<br>
+
+        Выход из сделки:
+        <span id="exitRule">—</span>
+
+    </div>
+
+
+    <button onclick="loadData()">
+        🔄 Обновить сейчас
+    </button>
 
 </div>
 
 
 <script>
 
-function esc(value) {
+function money(value) {
 
-    return String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
+    if (
+        value === undefined ||
+        value === null
+    ) {
+        return "0.00";
+    }
 
+    return Number(value)
+        .toLocaleString(
+            "ru-RU",
+            {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }
+        );
+}
+
+
+function signalClass(signal) {
+
+    if (
+        signal === "LONG"
+    ) {
+        return "long";
+    }
+
+    if (
+        signal === "SHORT"
+    ) {
+        return "short";
+    }
+
+    return "none";
+}
+
+
+function renderFutures(data) {
+
+    const container =
+        document.getElementById(
+            "futures"
+        );
+
+    container.innerHTML = "";
+
+    data.futures.forEach(
+        item => {
+
+            const signal =
+                item.strategy.signal;
+
+            const statusClass =
+                item.status === "OK"
+                ? "status"
+                : "status error";
+
+            const card =
+                document.createElement(
+                    "div"
+                );
+
+            card.className =
+                "card";
+
+            let openPosition =
+                "Нет";
+
+            if (
+                item.open_position
+            ) {
+
+                openPosition =
+                    item.open_position.direction
+                    +
+                    " от "
+                    +
+                    item.open_position.entry_price;
+
+            }
+
+            card.innerHTML = `
+
+                <h2>
+                    ${item.emoji}
+                    ${item.title}
+                </h2>
+
+                <span
+                    class="${statusClass}"
+                >
+                    ${item.status}
+                </span>
+
+                <div class="info">
+
+                    ${item.message}<br>
+
+                    Тикер:
+                    <b>${item.ticker}</b><br>
+
+                    UID:
+                    <b>${item.uid}</b><br>
+
+                    Свечей:
+                    <b>${item.candles}</b>
+
+                </div>
+
+                <div
+                    class="signal ${signalClass(signal)}"
+                >
+
+                    ${signal}
+
+                    <div
+                        style="
+                        font-size:12px;
+                        margin-top:6px;
+                        font-weight:normal;
+                        "
+                    >
+
+                        ${
+                            item.strategy.description
+                            || ""
+                        }
+
+                    </div>
+
+                </div>
+
+                <div class="info">
+
+                    Закрытых сделок:
+                    <b>
+                        ${
+                            item.statistics.total
+                            || 0
+                        }
+                    </b><br>
+
+                    Проходимость:
+                    <b>
+                        ${
+                            item.statistics.winrate
+                            || 0
+                        }%
+                    </b><br>
+
+                    Чистый результат:
+                    <b>
+                        ${
+                            money(
+                                item.statistics.net
+                            )
+                        } ₽
+                    </b><br>
+
+                    Открытая позиция:
+                    <b>
+                        ${openPosition}
+                    </b>
+
+                </div>
+            `;
+
+            container.appendChild(
+                card
+            );
+        }
+    );
+}
+
+
+function renderStatistics(
+    statistics
+) {
+
+    const container =
+        document.getElementById(
+            "statistics"
+        );
+
+    container.innerHTML = `
+
+        <div class="stat">
+
+            <div class="stat-title">
+                Всего сделок
+            </div>
+
+            <div class="stat-value">
+                ${statistics.total}
+            </div>
+
+        </div>
+
+
+        <div class="stat">
+
+            <div class="stat-title">
+                Прибыльных
+            </div>
+
+            <div class="stat-value positive">
+                ${statistics.profitable}
+            </div>
+
+        </div>
+
+
+        <div class="stat">
+
+            <div class="stat-title">
+                Убыточных
+            </div>
+
+            <div class="stat-value negative">
+                ${statistics.losing}
+            </div>
+
+        </div>
+
+
+        <div class="stat">
+
+            <div class="stat-title">
+                Проходимость
+            </div>
+
+            <div class="stat-value">
+                ${statistics.winrate}%
+            </div>
+
+        </div>
+
+
+        <div class="stat">
+
+            <div class="stat-title">
+                До расходов
+            </div>
+
+            <div class="stat-value">
+                ${money(statistics.gross)} ₽
+            </div>
+
+        </div>
+
+
+        <div class="stat">
+
+            <div class="stat-title">
+                Комиссии
+            </div>
+
+            <div class="stat-value">
+                ${money(statistics.commission)} ₽
+            </div>
+
+        </div>
+
+
+        <div class="stat">
+
+            <div class="stat-title">
+                Налог
+            </div>
+
+            <div class="stat-value">
+                ${money(statistics.tax)} ₽
+            </div>
+
+        </div>
+
+
+        <div class="stat">
+
+            <div class="stat-title">
+                ЧИСТЫЙ РЕЗУЛЬТАТ
+            </div>
+
+            <div
+                class="stat-value
+                ${
+                    statistics.net >= 0
+                    ? "positive"
+                    : "negative"
+                }"
+            >
+                ${money(statistics.net)} ₽
+            </div>
+
+        </div>
+    `;
+}
+
+
+function renderHistory(
+    data
+) {
+
+    const container =
+        document.getElementById(
+            "history"
+        );
+
+    let allTrades = [];
+
+    data.futures.forEach(
+        item => {
+
+            if (
+                item.history
+            ) {
+
+                allTrades =
+                    allTrades.concat(
+                        item.history
+                    );
+            }
+        }
+    );
+
+    allTrades.sort(
+        (a, b) =>
+            new Date(
+                b.exit_time
+            )
+            -
+            new Date(
+                a.exit_time
+            )
+    );
+
+    if (
+        allTrades.length === 0
+    ) {
+
+        container.innerHTML =
+            "<div class='info'>Пока закрытых сделок нет.</div>";
+
+        return;
+    }
+
+    let html = `
+
+        <table>
+
+            <thead>
+
+                <tr>
+
+                    <th>
+                        Инструмент
+                    </th>
+
+                    <th>
+                        Направление
+                    </th>
+
+                    <th>
+                        Вход
+                    </th>
+
+                    <th>
+                        Выход
+                    </th>
+
+                    <th>
+                        Цена входа
+                    </th>
+
+                    <th>
+                        Цена выхода
+                    </th>
+
+                    <th>
+                        Результат
+                    </th>
+
+                    <th>
+                        Комиссия
+                    </th>
+
+                    <th>
+                        Налог
+                    </th>
+
+                    <th>
+                        Чистый результат
+                    </th>
+
+                </tr>
+
+            </thead>
+
+            <tbody>
+    `;
+
+    allTrades
+        .slice(0, 100)
+        .forEach(
+            trade => {
+
+                const net =
+                    Number(
+                        trade.net_result
+                    );
+
+                const cls =
+                    net >= 0
+                    ? "positive"
+                    : "negative";
+
+                const commission =
+                    Number(
+                        trade.buy_commission
+                    )
+                    +
+                    Number(
+                        trade.sell_commission
+                    );
+
+                html += `
+
+                    <tr>
+
+                        <td>
+                            ${trade.title}
+                        </td>
+
+                        <td
+                            class="${
+                                trade.direction === "LONG"
+                                ? "long"
+                                : "short"
+                            }"
+                        >
+                            ${trade.direction}
+                        </td>
+
+                        <td>
+                            ${trade.entry_time}
+                        </td>
+
+                        <td>
+                            ${trade.exit_time}
+                        </td>
+
+                        <td>
+                            ${trade.entry_price}
+                        </td>
+
+                        <td>
+                            ${trade.exit_price}
+                        </td>
+
+                        <td>
+                            ${money(
+                                trade.gross_result
+                            )} ₽
+                        </td>
+
+                        <td>
+                            ${money(
+                                commission
+                            )} ₽
+                        </td>
+
+                        <td>
+                            ${money(
+                                trade.tax
+                            )} ₽
+                        </td>
+
+                        <td
+                            class="${cls}"
+                        >
+                            ${money(net)} ₽
+                        </td>
+
+                    </tr>
+                `;
+            }
+        );
+
+    html += `
+
+            </tbody>
+
+        </table>
+    `;
+
+    container.innerHTML =
+        html;
 }
 
 
 async function loadData() {
-
-    const app =
-        document.getElementById(
-            "app"
-        );
 
     try {
 
@@ -1415,273 +2647,79 @@ async function loadData() {
         const data =
             await response.json();
 
-        if (!response.ok) {
+        if (
+            data.error
+        ) {
 
-            throw new Error(
-                data.error ||
-                "Ошибка сервера"
+            console.error(
+                data.error
             );
 
+            return;
         }
 
-        render(data);
+        renderFutures(
+            data
+        );
+
+        renderStatistics(
+            data.statistics
+        );
+
+        renderHistory(
+            data
+        );
+
+        document.getElementById(
+            "updated"
+        ).textContent =
+            "Обновлено: "
+            +
+            new Date(
+                data.updated
+            ).toLocaleString(
+                "ru-RU"
+            );
+
+        document.getElementById(
+            "positionSize"
+        ).textContent =
+            money(
+                data.settings.position_size
+            );
+
+        document.getElementById(
+            "buyCommission"
+        ).textContent =
+            data.settings.buy_commission;
+
+        document.getElementById(
+            "sellCommission"
+        ).textContent =
+            data.settings.sell_commission;
+
+        document.getElementById(
+            "tax"
+        ).textContent =
+            data.settings.tax;
+
+        document.getElementById(
+            "exitRule"
+        ).textContent =
+            data.settings.exit_rule;
+
+    } catch (error) {
+
+        console.error(
+            "Ошибка загрузки:",
+            error
+        );
 
     }
-
-    catch (error) {
-
-        app.innerHTML = `
-
-            <div class="card">
-
-                <div class="status error">
-                    Ошибка
-                </div>
-
-                <div class="row">
-
-                    ${esc(
-                        error.message
-                    )}
-
-                </div>
-
-            </div>
-
-        `;
-
-    }
-
-}
-
-
-function render(data) {
-
-    let html = "";
-
-    const futures =
-        data.futures || [];
-
-
-    for (
-        const item of futures
-    ) {
-
-        let cls = "warning";
-
-        if (
-            item.status === "OK"
-        ) {
-
-            cls = "ok";
-
-        }
-
-        if (
-            item.status === "Ошибка"
-        ) {
-
-            cls = "error";
-
-        }
-
-
-        html += `
-
-            <div class="card">
-
-                <div class="title">
-
-                    ${esc(
-                        item.emoji
-                    )}
-
-                    ${esc(
-                        item.title
-                    )}
-
-                </div>
-
-
-                <div
-                    class="status ${cls}"
-                >
-
-                    ${esc(
-                        item.status
-                    )}
-
-                </div>
-
-
-                <div class="row">
-
-                    ${esc(
-                        item.message
-                    )}
-
-                </div>
-
-
-                <div class="row">
-
-                    Тикер:
-
-                    <span>
-                        ${esc(
-                            item.ticker ||
-                            "—"
-                        )}
-                    </span>
-
-                </div>
-
-
-                <div class="row">
-
-                    UID:
-
-                    <span>
-                        ${esc(
-                            item.uid ||
-                            "—"
-                        )}
-                    </span>
-
-                </div>
-
-
-                <div class="row">
-
-                    Свечей:
-
-                    <span>
-                        ${esc(
-                            item.candles ||
-                            0
-                        )}
-                    </span>
-
-                </div>
-
-            </div>
-
-        `;
-
-    }
-
-
-    const signal =
-        data.last_signal || {};
-
-
-    html += `
-
-        <div class="signal">
-
-            <div class="signal-title">
-
-                ПОСЛЕДНИЙ СИГНАЛ
-                СТРАТЕГИИ
-
-            </div>
-
-
-            <div class="signal-value">
-
-                Статус:
-
-                <span class="info">
-
-                    ${
-                        signal.signal ===
-                        "Нет сигналов"
-
-                        ? "Ожидание данных..."
-
-                        : "Сигнал обнаружен"
-                    }
-
-                </span>
-
-            </div>
-
-
-            <div class="signal-value">
-
-                Сигнал:
-
-                <span>
-
-                    ${esc(
-                        signal.signal ||
-                        "Нет сигналов"
-                    )}
-
-                </span>
-
-            </div>
-
-
-            <div class="signal-value">
-
-                Направление:
-
-                <span>
-
-                    ${esc(
-                        signal.direction ||
-                        "—"
-                    )}
-
-                </span>
-
-            </div>
-
-
-            <div class="row">
-
-                ${esc(
-                    signal.description ||
-                    ""
-                )}
-
-            </div>
-
-        </div>
-
-
-        <button
-            onclick="loadData()"
-        >
-
-            🔄 Обновить данные
-
-        </button>
-
-
-        <div class="small">
-
-            Последнее обновление:
-
-            ${esc(
-                data.updated || ""
-            )}
-
-        </div>
-
-    `;
-
-
-    document.getElementById(
-        "app"
-    ).innerHTML = html;
-
 }
 
 
 loadData();
-
 
 setInterval(
     loadData,
@@ -1690,16 +2728,14 @@ setInterval(
 
 </script>
 
-
 </body>
 
 </html>
-
 """
 
 
 # ============================================================
-# ГЛАВНАЯ
+# ГЛАВНАЯ СТРАНИЦА
 # ============================================================
 
 @app.route("/")
@@ -1720,73 +2756,51 @@ def background_monitor():
 
         try:
 
-            log.info(
-                "======================================"
-            )
-
-            log.info(
-                "ФОНОВАЯ ПРОВЕРКА"
-            )
-
             data = collect_data()
 
-            signal = data.get(
-                "last_signal",
-                {}
+            log.info(
+                "MARKUS TRADE | "
+                "обновление данных"
             )
+
+            for item in data[
+                "futures"
+            ]:
+
+                log.info(
+                    "%s | ticker=%s | "
+                    "candles=%s | signal=%s",
+                    item["title"],
+                    item["ticker"],
+                    item["candles"],
+                    item[
+                        "strategy"
+                    ]["signal"]
+                )
+
+            stats = data[
+                "statistics"
+            ]
 
             log.info(
-                "Последний сигнал: %s",
-                signal.get(
-                    "signal"
-                )
+                "СТАТИСТИКА | "
+                "сделок=%s | "
+                "winrate=%s%% | "
+                "чистый=%s ₽",
+                stats["total"],
+                stats["winrate"],
+                stats["net"]
             )
 
-        except Exception:
+        except Exception as e:
 
             log.exception(
-                "Ошибка фоновой проверки"
+                "Ошибка фонового мониторинга: %s",
+                e
             )
 
         time.sleep(
-            300
-        )
-
-
-# ============================================================
-# STARTUP
-# ============================================================
-
-def startup():
-
-    log.info(
-        "======================================"
-    )
-
-    log.info(
-        "       MARKUS TRADE"
-    )
-
-    log.info(
-        "       START"
-    )
-
-    log.info(
-        "======================================"
-    )
-
-    token = get_token()
-
-    if token:
-
-        log.info(
-            "API TOKEN: найден"
-        )
-
-    else:
-
-        log.error(
-            "API TOKEN: НЕ НАЙДЕН"
+            UPDATE_SECONDS
         )
 
 
@@ -1796,14 +2810,26 @@ def startup():
 
 if __name__ == "__main__":
 
-    startup()
+    token = get_token()
 
-    thread = threading.Thread(
+    if not token:
+
+        log.error(
+            "ВНИМАНИЕ: API-токен не найден!"
+        )
+
+    else:
+
+        log.info(
+            "API-токен найден."
+        )
+
+    monitor_thread = threading.Thread(
         target=background_monitor,
         daemon=True
     )
 
-    thread.start()
+    monitor_thread.start()
 
     port = int(
         os.environ.get(
@@ -1812,9 +2838,14 @@ if __name__ == "__main__":
         )
     )
 
+    log.info(
+        "MARKUS TRADE запускается "
+        "на порту %s",
+        port
+    )
+
     app.run(
         host="0.0.0.0",
         port=port,
         debug=False
     )
-
