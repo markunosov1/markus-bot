@@ -717,53 +717,39 @@ def normalize_candles(candles):
             "description": "Недостаточно свечей"
         }
 
-    # 1. Извлекаем сырые данные
     closes = [x["close"] for x in candles]
     highs = [x["high"] for x in candles]
     lows = [x["low"] for x in candles]
     opens = [x["open"] for x in candles]
 
-    # Встроенный расчет RSI-14
-    def calculate_rsi(prices, period=14):
-        gains, losses = [], []
-        for i in range(1, len(prices)):
-            diff = prices[i] - prices[i-1]
-            gains.append(max(diff, 0))
-            losses.append(max(-diff, 0))
-        if len(gains) < period: return 50
-        avg_gain = sum(gains[:period]) / period
-        avg_loss = sum(losses[:period]) / period
-        for i in range(period, len(gains)):
-            avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-            avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-        if avg_loss == 0: return 100
-        return 100 - (100 / (1 + (avg_gain / avg_loss)))
-
-    # Получаем текущие технические индикаторы
-    rsi = calculate_rsi(closes, 14)
+    # Внутренний расчет RSI-14
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i-1]
+        gains.append(max(diff, 0))
+        losses.append(max(-diff, 0))
     
-    # Считаем простую скользящую среднюю (SMA-20) для определения тренда
+    if len(gains) < 14:
+        rsi = 50
+    else:
+        avg_gain = sum(gains[:14]) / 14
+        avg_loss = sum(losses[:14]) / 14
+        for i in range(14, len(gains)):
+            avg_gain = (avg_gain * 13 + gains[i]) / 14
+            avg_loss = (avg_loss * 13 + losses[i]) / 14
+        if avg_loss == 0:
+            rsi = 100
+        else:
+            rsi = 100 - (100 / (1 + (avg_gain / avg_loss)))
+
     sma_20 = sum(closes[-20:]) / 20
 
-    # Проверяем направление последних свечей (Ваше условие: 2 красные или 2 зеленые подряд)
     two_red_candles = (closes[-1] < opens[-1]) and (closes[-2] < opens[-2])
     two_green_candles = (closes[-1] > opens[-1]) and (closes[-2] > opens[-2])
 
-    # ========================================================
-    # НОВАЯ ГИБКАЯ ЛОГИКА СИГНАЛОВ
-    # ========================================================
-    
-    # Сигнал SHORT (Определяем начало падения):
-    # Рынок перекуплен (RSI > 60), цена начала падать ниже тренда И закрылось 2 красные свечи подряд
     short_pattern = (rsi > 55) and (closes[-1] < sma_20) and two_red_candles
-
-    # Сигнал LONG (Определяем начало роста):
-    # Рынок перепродан (RSI < 40), цена разворачивается выше тренда И закрылось 2 зеленые свечи подряд
     long_pattern = (rsi < 45) and (closes[-1] > sma_20) and two_green_candles
 
-    # ========================================================
-    # ВЫВОД РЕЗУЛЬТАТОВ В МИНИ-ПРИЛОЖЕНИЕ
-    # ========================================================
     if short_pattern:
         return {
             "signal": "SHORT",
@@ -778,13 +764,11 @@ def normalize_candles(candles):
             "description": f"Сигнал LONG! RSI: {round(rsi, 2)}. Покупатели перехватили тренд."
         }
 
-    # Полезная отладка: выводим текущее состояние рынка прямо на экран, если сигнала нет
     return {
         "signal": "Нет сигналов",
         "direction": "—",
         "description": f"Анализ: RSI={round(rsi, 2)}, Свеча1={'Красная' if closes[-1] < opens[-1] else 'Зеленая'}, Свеча2={'Красная' if closes[-2] < opens[-2] else 'Зеленая'}"
     }
-
 
 
 # ============================================================
