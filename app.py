@@ -707,132 +707,84 @@ def normalize_candles(candles):
 
 
 # ============================================================
-# ТВОЯ СТРАТЕГИЯ MARKUS TRADE
-#
-# LONG:
-# Higher Lows → 2 зелёные свечи → LONG
-#
-# SHORT:
-# Lower Highs → 2 красные свечи → SHORT
+# ТВОЯ СТРАТЕГИЯ
 # ============================================================
 
 def analyze_strategy(candles):
 
-    # --------------------------------------------------------
-    # Нужно минимум 7 свечей
-    # --------------------------------------------------------
+    if len(candles) < 8:
 
-    if len(candles) < 7:
         return {
             "signal": "Нет сигналов",
             "direction": "—",
-            "description": "Недостаточно свечей"
+            "description":
+                "Недостаточно свечей"
         }
 
-    # Берём последние 7 свечей
-    last = candles[-7:]
+    last = candles[-8:]
 
-    # --------------------------------------------------------
-    # OHLC
-    # --------------------------------------------------------
+    highs = [
+        x["high"]
+        for x in last
+    ]
 
-    opens = [x["open"] for x in last]
-    highs = [x["high"] for x in last]
-    lows = [x["low"] for x in last]
-    closes = [x["close"] for x in last]
+    lows = [
+        x["low"]
+        for x in last
+    ]
 
-    # ========================================================
-    # ПОСЛЕДНИЕ 2 СВЕЧИ — СВЕЧИ ПОДТВЕРЖДЕНИЯ
-    # ========================================================
-
-    prev_open = opens[-2]
-    prev_close = closes[-2]
-
-    last_open = opens[-1]
-    last_close = closes[-1]
-
-    # ========================================================
-    # LONG
-    #
-    # Higher Lows:
-    #
-    # L3 > L2
-    # L4 > L3
-    # L5 > L4
-    #
-    # Затем 2 зелёные свечи
-    # ========================================================
-
-    higher_lows = (
-        lows[-5] > lows[-6]
-        and
-        lows[-4] > lows[-5]
-        and
-        lows[-3] > lows[-4]
-    )
-
-    two_green_candles = (
-        prev_close > prev_open
-        and
-        last_close > last_open
-    )
-
-    long_pattern = (
-        higher_lows
-        and
-        two_green_candles
-    )
+    closes = [
+        x["close"]
+        for x in last
+    ]
 
     # ========================================================
     # SHORT
     #
-    # Lower Highs:
+    # Последовательные максимумы растут:
     #
-    # H3 < H2
-    # H4 < H3
-    # H5 < H4
+    # H3 > H2
+    # H4 > H3
+    # H5 > H4
     #
-    # Затем 2 красные свечи
+    # Затем три снижающихся закрытия
     # ========================================================
-
-    lower_highs = (
-        highs[-5] < highs[-6]
-        and
-        highs[-4] < highs[-5]
-        and
-        highs[-3] < highs[-4]
-    )
-
-    two_red_candles = (
-        prev_close < prev_open
-        and
-        last_close < last_open
-    )
 
     short_pattern = (
-        lower_highs
+        highs[3] > highs[2]
         and
-        two_red_candles
+        highs[4] > highs[3]
+        and
+        highs[5] > highs[4]
+        and
+        closes[-1] < closes[-2]
+        and
+        closes[-2] < closes[-3]
     )
 
     # ========================================================
-    # LONG SIGNAL
+    # LONG
+    #
+    # Последовательные минимумы снижаются:
+    #
+    # L3 < L2
+    # L4 < L3
+    # L5 < L4
+    #
+    # Затем три повышающихся закрытия
     # ========================================================
 
-    if long_pattern:
-
-        return {
-            "signal": "LONG",
-            "direction": "Вверх",
-            "description":
-                "Higher Lows сформированы → "
-                "2 зелёные свечи → вход LONG",
-            "entry_price": last_close
-        }
-
-    # ========================================================
-    # SHORT SIGNAL
-    # ========================================================
+    long_pattern = (
+        lows[3] < lows[2]
+        and
+        lows[4] < lows[3]
+        and
+        lows[5] < lows[4]
+        and
+        closes[-1] > closes[-2]
+        and
+        closes[-2] > closes[-3]
+    )
 
     if short_pattern:
 
@@ -840,23 +792,24 @@ def analyze_strategy(candles):
             "signal": "SHORT",
             "direction": "Вниз",
             "description":
-                "Lower Highs сформированы → "
-                "2 красные свечи → вход SHORT",
-            "entry_price": last_close
+                "Сформирован SHORT-сигнал"
         }
 
-    # ========================================================
-    # НЕТ СИГНАЛА
-    # ========================================================
+    if long_pattern:
+
+        return {
+            "signal": "LONG",
+            "direction": "Вверх",
+            "description":
+                "Сформирован LONG-сигнал"
+        }
 
     return {
         "signal": "Нет сигналов",
         "direction": "—",
         "description":
-            "Структура Higher Lows / Lower Highs "
-            "или 2 подтверждающие свечи не сформированы"
+            "Сигнал не сформирован"
     }
-
 # ============================================================
 # ИСТОРИЯ
 # ============================================================
