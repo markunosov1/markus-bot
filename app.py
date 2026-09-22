@@ -710,34 +710,52 @@ def normalize_candles(candles):
 # ТВОЯ СТРАТЕГИЯ
 # ============================================================
 
-def analyze_strategy(candles):
-
-    if len(candles) < 21:
+def strategy_my(candles):
+    if len(candles) < 8:
         return {
             "signal": "Нет сигналов",
             "direction": "—",
             "description": "Недостаточно свечей"
         }
 
-    previous = candles[-21:-1]
+    last = candles[-8:]
 
-    highest = max(float(x["high"]) for x in previous)
-    lowest = min(float(x["low"]) for x in previous)
+    highs = [float(x["high"]) for x in last]
+    lows = [float(x["low"]) for x in last]
+    closes = [float(x["close"]) for x in last]
 
-    close = float(candles[-1]["close"])
+    # SHORT:
+    # последовательный рост максимумов + 3 падающих закрытия
+    short_pattern = (
+        highs[3] > highs[2]
+        and highs[4] > highs[3]
+        and highs[5] > highs[4]
+        and closes[-1] < closes[-2]
+        and closes[-2] < closes[-3]
+    )
 
-    if close > highest:
-        return {
-            "signal": "LONG",
-            "direction": "Вверх",
-            "description": "Пробой максимума диапазона"
-        }
+    # LONG:
+    # последовательное снижение минимумов + 3 растущих закрытия
+    long_pattern = (
+        lows[3] < lows[2]
+        and lows[4] < lows[3]
+        and lows[5] < lows[4]
+        and closes[-1] > closes[-2]
+        and closes[-2] > closes[-3]
+    )
 
-    if close < lowest:
+    if short_pattern:
         return {
             "signal": "SHORT",
             "direction": "Вниз",
-            "description": "Пробой минимума диапазона"
+            "description": "Рост максимумов завершился падением"
+        }
+
+    if long_pattern:
+        return {
+            "signal": "LONG",
+            "direction": "Вверх",
+            "description": "Снижение минимумов завершилось ростом"
         }
 
     return {
