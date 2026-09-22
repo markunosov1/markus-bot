@@ -712,41 +712,32 @@ def normalize_candles(candles):
 
 def analyze_strategy(candles):
 
-    if len(candles) < 50:
+    if len(candles) < 21:
         return {
             "signal": "Нет сигналов",
             "direction": "—",
             "description": "Недостаточно свечей"
         }
 
-    closes = [float(x["close"]) for x in candles]
+    previous = candles[-21:-1]
 
-    def ema(values, period):
-        multiplier = 2 / (period + 1)
-        result = values[0]
+    highest = max(float(x["high"]) for x in previous)
+    lowest = min(float(x["low"]) for x in previous)
 
-        for price in values[1:]:
-            result = price * multiplier + result * (1 - multiplier)
+    close = float(candles[-1]["close"])
 
-        return result
-
-    ema20 = ema(closes[-20:], 20)
-    ema50 = ema(closes[-50:], 50)
-
-    price = closes[-1]
-
-    if ema20 > ema50 and price > ema20:
+    if close > highest:
         return {
             "signal": "LONG",
             "direction": "Вверх",
-            "description": "EMA20 выше EMA50, цена выше EMA20"
+            "description": "Пробой максимума диапазона"
         }
 
-    if ema20 < ema50 and price < ema20:
+    if close < lowest:
         return {
             "signal": "SHORT",
             "direction": "Вниз",
-            "description": "EMA20 ниже EMA50, цена ниже EMA20"
+            "description": "Пробой минимума диапазона"
         }
 
     return {
