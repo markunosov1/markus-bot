@@ -709,9 +709,7 @@ def normalize_candles(candles):
 # ============================================================
 # ТВОЯ СТРАТЕГИЯ
 # ============================================================
- 
-def analyze_strategy(candles):
-    # Нам по-прежнему нужно 20 свечей для расчета средних значений
+ def analyze_strategy(candles):
     if len(candles) < 20:
         return {
             "signal": "Нет сигналов",
@@ -719,22 +717,13 @@ def analyze_strategy(candles):
             "description": "Недостаточно свечей"
         }
 
-    # 1. Сбор данных для индикаторов
-    closes_all = [x["close"] for x in candles]
-    volumes_all = [x["volume"] for x in candles]
-    highs_all = [x["high"] for x in candles]
-    lows_all = [x["low"] for x in candles]
-    opens_all = [x["open"] for x in candles]
+    # 1. Извлекаем сырые данные
+    closes = [x["close"] for x in candles]
+    highs = [x["high"] for x in candles]
+    lows = [x["low"] for x in candles]
+    opens = [x["open"] for x in candles]
 
-    # Встроенный быстрый расчет EMA-20
-    def calculate_ema(prices, period=20):
-        k = 2 / (period + 1)
-        ema = prices[0]
-        for price in prices[1:]:
-            ema = price * k + ema * (1 - k)
-        return ema
-    
-    # Встроенный быстрый расчет RSI-14
+    # Встроенный расчет RSI-14
     def calculate_rsi(prices, period=14):
         gains, losses = [], []
         for i in range(1, len(prices)):
@@ -750,85 +739,52 @@ def analyze_strategy(candles):
         if avg_loss == 0: return 100
         return 100 - (100 / (1 + (avg_gain / avg_loss)))
 
-    # Текущие значения индикаторов
-    current_ema = calculate_ema(closes_all, 20)
-    current_rsi = calculate_rsi(closes_all, 14)
-    avg_volume = sum(volumes_all[-20:]) / 20
-    current_volume = volumes_all[-1]
-
-    # Срез последних 8 свечей для вашей базовой логики паттернов
-    last = candles[-8:]
-    highs = [x["high"] for x in last]
-    lows = [x["low"] for x in last]
-    closes = [x["close"] for x in last]
-
-    # ========================================================
-    # СБАЛАНСИРОВАННЫЙ SHORT-ПАТТЕРН (Исправленный)
-    # ========================================================
-    # Восстанавливаем ваши точные индексы из первой версии кода
-    base_short = (
-        highs[3] > highs[2] and
-        highs[4] > highs[3] and
-        highs[5] > highs[4] and
-        closes[-1] < closes[-2] and
-        closes[-2] < closes[-3]
-    )
+    # Получаем текущие технические индикаторы
+    rsi = calculate_rsi(closes, 14)
     
-    # Умные фильтры: не блокируют намертво, а подтверждают силу движения
-    volume_confirm_short = current_volume > avg_volume  # Объем просто выше среднего (без жестких 1.5х)
-    trend_confirm_short = closes_all[-1] < current_ema   # Цена под трендовой линией
-    rsi_confirm_short = current_rsi > 50                # Импульс все еще имеет силу для падения
+    # Считаем простую скользящую среднюю (SMA-20) для определения тренда
+    sma_20 = sum(closes[-20:]) / 20
 
-    # Сигнал идет, если выполнена база И есть хотя бы два подтверждения от индикаторов
-    short_pattern = base_short and (
-        (trend_confirm_short and volume_confirm_short) or 
-        (trend_confirm_short and rsi_confirm_short) or
-        (volume_confirm_short and rsi_confirm_short)
-    )
+    # Проверяем направление последних свечей (Ваше условие: 2 красные или 2 зеленые подряд)
+    two_red_candles = (closes[-1] < opens[-1]) and (closes[-2] < opens[-2])
+    two_green_candles = (closes[-1] > opens[-1]) and (closes[-2] > opens[-2])
 
     # ========================================================
-    # СБАЛАНСИРОВАННЫЙ LONG-ПАТТЕРН (Исправленный)
+    # НОВАЯ ГИБКАЯ ЛОГИКА СИГНАЛОВ
     # ========================================================
-    base_long = (
-        lows[3] < lows[2] and
-        lows[4] < lows[3] and
-        lows[5] < lows[4] and
-        closes[-1] > closes[-2] and
-        closes[-2] > closes[-3]
-    )
     
-    volume_confirm_long = current_volume > avg_volume
-    trend_confirm_long = closes_all[-1] > current_ema
-    rsi_confirm_long = current_rsi < 50
+    # Сигнал SHORT (Определяем начало падения):
+    # Рынок перекуплен (RSI > 60), цена начала падать ниже тренда И закрылось 2 красные свечи подряд
+    short_pattern = (rsi > 55) and (closes[-1] < sma_20) and two_red_candles
 
-    long_pattern = base_long and (
-        (trend_confirm_long and volume_confirm_long) or 
-        (trend_confirm_long and rsi_confirm_long) or
-        (volume_confirm_long and rsi_confirm_long)
-    )
+    # Сигнал LONG (Определяем начало роста):
+    # Рынок перепродан (RSI < 40), цена разворачивается выше тренда И закрылось 2 зеленые свечи подряд
+    long_pattern = (rsi < 45) and (closes[-1] > sma_20) and two_green_candles
 
     # ========================================================
-    # ВЫДАЧА РЕЗУЛЬТАТА
+    # ВЫВОД РЕЗУЛЬТАТОВ В МИНИ-ПРИЛОЖЕНИЕ
     # ========================================================
     if short_pattern:
         return {
             "signal": "SHORT",
             "direction": "Вниз",
-            "description": "Сформирован подтвержденный SHORT-сигнал"
+            "description": f"Сигнал SHORT! RSI: {round(rsi, 2)}. Начало сильного падения."
         }
 
     if long_pattern:
         return {
             "signal": "LONG",
             "direction": "Вверх",
-            "description": "Сформирован подтвержденный LONG-сигнал"
+            "description": f"Сигнал LONG! RSI: {round(rsi, 2)}. Покупатели перехватили тренд."
         }
 
+    # Полезная отладка: выводим текущее состояние рынка прямо на экран, если сигнала нет
     return {
         "signal": "Нет сигналов",
         "direction": "—",
-        "description": "Сигнал не сформирован или отфильтрован"
+        "description": f"Анализ: RSI={round(rsi, 2)}, Свеча1={'Красная' if closes[-1] < opens[-1] else 'Зеленая'}, Свеча2={'Красная' if closes[-2] < opens[-2] else 'Зеленая'}"
     }
+
 
 
 # ============================================================
