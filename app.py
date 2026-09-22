@@ -710,106 +710,29 @@ def normalize_candles(candles):
 # ТВОЯ СТРАТЕГИЯ
 # ============================================================
 
-def analyze_strategy(candles):
+def strategy_trend_following(candles):
+    if len(candles) < 50:
+        return None
 
-    if len(candles) < 8:
+    closes = [float(c["close"]) for c in candles]
 
-        return {
-            "signal": "Нет сигналов",
-            "direction": "—",
-            "description":
-                "Недостаточно свечей"
-        }
+    def ema(data, period):
+        k = 2 / (period + 1)
+        value = data[0]
+        for price in data[1:]:
+            value = price * k + value * (1 - k)
+        return value
 
-    last = candles[-8:]
+    ema_fast = ema(closes[-50:], 20)
+    ema_slow = ema(closes[-50:], 50)
 
-    highs = [
-        x["high"]
-        for x in last
-    ]
+    if ema_fast > ema_slow and closes[-1] > ema_fast:
+        return "LONG"
 
-    lows = [
-        x["low"]
-        for x in last
-    ]
+    if ema_fast < ema_slow and closes[-1] < ema_fast:
+        return "SHORT"
 
-    closes = [
-        x["close"]
-        for x in last
-    ]
-
-    # ========================================================
-    # SHORT
-    #
-    # Последовательные максимумы растут:
-    #
-    # H3 > H2
-    # H4 > H3
-    # H5 > H4
-    #
-    # Затем три снижающихся закрытия
-    # ========================================================
-
-    short_pattern = (
-        highs[3] > highs[2]
-        and
-        highs[4] > highs[3]
-        and
-        highs[5] > highs[4]
-        and
-        closes[-1] < closes[-2]
-        and
-        closes[-2] < closes[-3]
-    )
-
-    # ========================================================
-    # LONG
-    #
-    # Последовательные минимумы снижаются:
-    #
-    # L3 < L2
-    # L4 < L3
-    # L5 < L4
-    #
-    # Затем три повышающихся закрытия
-    # ========================================================
-
-    long_pattern = (
-        lows[3] < lows[2]
-        and
-        lows[4] < lows[3]
-        and
-        lows[5] < lows[4]
-        and
-        closes[-1] > closes[-2]
-        and
-        closes[-2] > closes[-3]
-    )
-
-    if short_pattern:
-
-        return {
-            "signal": "SHORT",
-            "direction": "Вниз",
-            "description":
-                "Сформирован SHORT-сигнал"
-        }
-
-    if long_pattern:
-
-        return {
-            "signal": "LONG",
-            "direction": "Вверх",
-            "description":
-                "Сформирован LONG-сигнал"
-        }
-
-    return {
-        "signal": "Нет сигналов",
-        "direction": "—",
-        "description":
-            "Сигнал не сформирован"
-    }
+    return None
 # ============================================================
 # ИСТОРИЯ
 # ============================================================
