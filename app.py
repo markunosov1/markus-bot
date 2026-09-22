@@ -710,29 +710,50 @@ def normalize_candles(candles):
 # ТВОЯ СТРАТЕГИЯ
 # ============================================================
 
-def strategy_trend_following(candles):
+def analyze_strategy(candles):
+
     if len(candles) < 50:
-        return None
+        return {
+            "signal": "Нет сигналов",
+            "direction": "—",
+            "description": "Недостаточно свечей"
+        }
 
-    closes = [float(c["close"]) for c in candles]
+    closes = [float(x["close"]) for x in candles]
 
-    def ema(data, period):
-        k = 2 / (period + 1)
-        value = data[0]
-        for price in data[1:]:
-            value = price * k + value * (1 - k)
-        return value
+    def ema(values, period):
+        multiplier = 2 / (period + 1)
+        result = values[0]
 
-    ema_fast = ema(closes[-50:], 20)
-    ema_slow = ema(closes[-50:], 50)
+        for price in values[1:]:
+            result = price * multiplier + result * (1 - multiplier)
 
-    if ema_fast > ema_slow and closes[-1] > ema_fast:
-        return "LONG"
+        return result
 
-    if ema_fast < ema_slow and closes[-1] < ema_fast:
-        return "SHORT"
+    ema20 = ema(closes[-20:], 20)
+    ema50 = ema(closes[-50:], 50)
 
-    return None
+    price = closes[-1]
+
+    if ema20 > ema50 and price > ema20:
+        return {
+            "signal": "LONG",
+            "direction": "Вверх",
+            "description": "EMA20 выше EMA50, цена выше EMA20"
+        }
+
+    if ema20 < ema50 and price < ema20:
+        return {
+            "signal": "SHORT",
+            "direction": "Вниз",
+            "description": "EMA20 ниже EMA50, цена ниже EMA20"
+        }
+
+    return {
+        "signal": "Нет сигналов",
+        "direction": "—",
+        "description": "Сигнал не сформирован"
+    }
 # ============================================================
 # ИСТОРИЯ
 # ============================================================
