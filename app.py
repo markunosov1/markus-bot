@@ -711,27 +711,22 @@ def normalize_candles(candles):
 # ============================================================
  
 def analyze_strategy(candles):
-    # Увеличиваем минимальное количество свечей до 20, 
-    # чтобы корректно рассчитать Скользящую среднюю (EMA) и средний объем.
+    # Нам по-прежнему нужно 20 свечей для расчета средних значений
     if len(candles) < 20:
         return {
             "signal": "Нет сигналов",
             "direction": "—",
-            "description": "Недостаточно свечей для фильтрации шума (нужно минимум 20)"
+            "description": "Недостаточно свечей"
         }
 
-    # 1. Извлекаем списки данных из всех свечей для расчетов индикаторов
+    # 1. Сбор данных для индикаторов
     closes_all = [x["close"] for x in candles]
     volumes_all = [x["volume"] for x in candles]
     highs_all = [x["high"] for x in candles]
     lows_all = [x["low"] for x in candles]
     opens_all = [x["open"] for x in candles]
 
-    # ========================================================
-    # ВСТРОЕННЫЙ МАТЕМАТИЧЕСКИЙ БЛОК (БЕЗ ВНЕШНИХ БИБЛИОТЕК)
-    # ========================================================
-    
-    # Расчет EMA-20 (Экспоненциальная скользящая средняя для определения тренда)
+    # Встроенный быстрый расчет EMA-20
     def calculate_ema(prices, period=20):
         k = 2 / (period + 1)
         ema = prices[0]
@@ -739,118 +734,102 @@ def analyze_strategy(candles):
             ema = price * k + ema * (1 - k)
         return ema
     
-    # Расчет RSI-14 (Индекс относительной силы для поиска дивергенций)
+    # Встроенный быстрый расчет RSI-14
     def calculate_rsi(prices, period=14):
-        gains = []
-        losses = []
+        gains, losses = [], []
         for i in range(1, len(prices)):
             diff = prices[i] - prices[i-1]
             gains.append(max(diff, 0))
             losses.append(max(-diff, 0))
-        
-        if len(gains) < period:
-            return 50
-        
+        if len(gains) < period: return 50
         avg_gain = sum(gains[:period]) / period
         avg_loss = sum(losses[:period]) / period
-        
         for i in range(period, len(gains)):
             avg_gain = (avg_gain * (period - 1) + gains[i]) / period
             avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-            
-        if avg_loss == 0:
-            return 100
-        rs = avg_gain / avg_loss
-        return 100 - (100 / (1 + rs))
+        if avg_loss == 0: return 100
+        return 100 - (100 / (1 + (avg_gain / avg_loss)))
 
-    # Вычисляем текущие значения индикаторов для последней закрытой свечи
-    current_ema = calculate_ema(closes_all, period=20)
-    current_rsi = calculate_rsi(closes_all, period=14)
-    previous_rsi = calculate_rsi(closes_all[:-1], period=14)
-    
-    # Средний объем за последние 20 свечей и объем текущей свечи
+    # Текущие значения индикаторов
+    current_ema = calculate_ema(closes_all, 20)
+    current_rsi = calculate_rsi(closes_all, 14)
     avg_volume = sum(volumes_all[-20:]) / 20
     current_volume = volumes_all[-1]
 
-    # Срез последних 8 свечей для вашей базовой логики
+    # Срез последних 8 свечей для вашей базовой логики паттернов
     last = candles[-8:]
     highs = [x["high"] for x in last]
     lows = [x["low"] for x in last]
     closes = [x["close"] for x in last]
 
     # ========================================================
-    # СИГНАЛ SHORT (Определитель точного Дампа)
+    # СБАЛАНСИРОВАННЫЙ SHORT-ПАТТЕРН (Исправленный)
     # ========================================================
-    
-    # Ваше базовое условие (модифицировано под 3 красные свечи из вашего кода)
-    base_short_pattern = (
-        highs[3] > highs[2]
-        and highs[4] > highs[3]
-        and highs[5] > highs[4]
-        and closes[-1] < closes[-2]
-        and closes[-2] < closes[-3]
+    # Восстанавливаем ваши точные индексы из первой версии кода
+    base_short = (
+        highs[3] > highs[2] and
+        highs[4] > highs[3] and
+        highs[5] > highs[4] and
+        closes[-1] < closes[-2] and
+        closes[-2] < closes[-3]
     )
     
-    # Фильтр 1: Пробой линии тренда (цена закрылась ниже динамической поддержки EMA)
-    trend_break_short = closes_all[-1] < current_ema
-    
-    # Фильтр 2: Аномальный объем (объем текущей свечи выше среднего в 1.5 раза)
-    high_volume_short = current_volume > (avg_volume * 1.5) and (closes_all[-1] < opens_all[-1])
-    
-    # Фильтр 3: Медвежья дивергенция (цена обновила хай, но сила RSI падает в зоне перекупленности)
-    rsi_weakness = current_rsi > 65 and current_rsi < previous_rsi and highs_all[-1] > highs_all[-2]
+    # Умные фильтры: не блокируют намертво, а подтверждают силу движения
+    volume_confirm_short = current_volume > avg_volume  # Объем просто выше среднего (без жестких 1.5х)
+    trend_confirm_short = closes_all[-1] < current_ema   # Цена под трендовой линией
+    rsi_confirm_short = current_rsi > 50                # Импульс все еще имеет силу для падения
 
-    # Итоговый SHORT срабатывает только если к вашей базе добавляется пробой тренда 
-    # И это подтверждено ЛИБО объемами крупных игроков, ЛИБО дивергенцией по RSI
-    short_pattern = base_short_pattern and trend_break_short and (high_volume_short or rsi_weakness)
+    # Сигнал идет, если выполнена база И есть хотя бы два подтверждения от индикаторов
+    short_pattern = base_short and (
+        (trend_confirm_short and volume_confirm_short) or 
+        (trend_confirm_short and rsi_confirm_short) or
+        (volume_confirm_short and rsi_confirm_short)
+    )
 
     # ========================================================
-    # СИГНАЛ LONG (Определитель точного Пампа/Отскока)
+    # СБАЛАНСИРОВАННЫЙ LONG-ПАТТЕРН (Исправленный)
     # ========================================================
-    
-    # Ваше базовое условие
-    base_long_pattern = (
-        lows[3] < lows[2]
-        and lows[4] < lows[3]
-        and lows[5] < lows[4]
-        and closes[-1] > closes[-2]
-        and closes[-2] > closes[-3]
+    base_long = (
+        lows[3] < lows[2] and
+        lows[4] < lows[3] and
+        lows[5] < lows[4] and
+        closes[-1] > closes[-2] and
+        closes[-2] > closes[-3]
     )
     
-    # Фильтр 1: Пробой тренда вверх (цена закрепилась над EMA)
-    trend_break_long = closes_all[-1] > current_ema
-    
-    # Фильтр 2: Аномальный объем на покупку
-    high_volume_long = current_volume > (avg_volume * 1.5) and (closes_all[-1] > opens_all[-1])
-    
-    # Фильтр 3: Бычья дивергенция (цена обновила лой, но RSI в зоне перепроданности начал расти)
-    rsi_strength = current_rsi < 35 and current_rsi > previous_rsi and lows_all[-1] < lows_all[-2]
+    volume_confirm_long = current_volume > avg_volume
+    trend_confirm_long = closes_all[-1] > current_ema
+    rsi_confirm_long = current_rsi < 50
 
-    # Итоговый LONG
-    long_pattern = base_long_pattern and trend_break_long and (high_volume_long or rsi_strength)
+    long_pattern = base_long and (
+        (trend_confirm_long and volume_confirm_long) or 
+        (trend_confirm_long and rsi_confirm_long) or
+        (volume_confirm_long and rsi_confirm_long)
+    )
 
     # ========================================================
-    # ВОЗВРАТ РЕЗУЛЬТАТОВ
+    # ВЫДАЧА РЕЗУЛЬТАТА
     # ========================================================
     if short_pattern:
         return {
             "signal": "SHORT",
             "direction": "Вниз",
-            "description": "🚨 Сформирован подтвержденный SHORT-сигнал (Дамп). Пробит тренд, зафиксирован всплеск объёмов/дивергенция."
+            "description": "Сформирован подтвержденный SHORT-сигнал"
         }
 
     if long_pattern:
         return {
             "signal": "LONG",
             "direction": "Вверх",
-            "description": "🚀 Сформирован подтвержденный LONG-сигнал (Памп). Пробит тренд вверх на повышенных объемах/конвергенции."
+            "description": "Сформирован подтвержденный LONG-сигнал"
         }
 
     return {
         "signal": "Нет сигналов",
         "direction": "—",
-        "description": "Сигнал не сформирован или отфильтрован как ложный шум"
+        "description": "Сигнал не сформирован или отфильтрован"
     }
+
 
 # ============================================================
 # ИСТОРИЯ
