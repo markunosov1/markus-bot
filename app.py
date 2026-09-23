@@ -1124,11 +1124,9 @@ def build_strategy_history(
 ):
  
    if len(candles) < 8:
- 
        return [], None
  
    trades = []
- 
    current_position = None
  
    # Последний индекс свечи
@@ -1147,55 +1145,95 @@ def build_strategy_history(
  
        signal = analysis[
            "signal"
-       ]
- 
+         ]
+
        candle = candles[i]
- 
-       price = candle[
-           "close"
-       ]
- 
-       candle_time = candle[
-           "time"
-       ]
+       price = candle["close"]
+       candle_time = candle["time"]
+       
+       # Берем экстремумы текущей свечи для точной проверки Стоп-Лосса
+       high_price = candle.get("high", price)
+       low_price = candle.get("low", price)
  
        # ----------------------------------------------------
        # Если позиции нет
        # ----------------------------------------------------
- 
        if current_position is None:
  
            if signal in (
                "LONG",
                "SHORT"
            ):
+               # Извлекаем рассчитанный Стоп-Лосс из нашей обновленной стратегии
+               stop_loss_level = analysis.get("stop_loss")
  
                current_position = {
                    "instrument": instrument,
                    "title": title,
                    "direction": signal,
                    "entry_price": price,
-                   "entry_time": candle_time
+                   "entry_time": candle_time,
+                   "stop_loss": stop_loss_level  # Сохраняем цену защиты
                }
  
            continue
  
        # ----------------------------------------------------
-       # Если пришел тот же сигнал
-       # Ничего не делаем
+       # ПРОВЕРКА СТОП-ЛОССА (Досрочный выход) — Новое!
        # ----------------------------------------------------
+       is_sl_triggered = False
+       exit_price_sl = price
  
-       if signal == current_position[
-           "direction"
-       ]:
+       if current_position["stop_loss"] is not None:
+           if current_position["direction"] == "LONG":
+               # Если цена на свече опускалась до стопа или ниже
+               if low_price <= current_position["stop_loss"]:
+                   is_sl_triggered = True
+                   # Выходим по цене стопа (или по закрытию, если был резкий гэп)
+                   exit_price_sl = min(current_position["entry_price"], current_position["stop_loss"])
+                   
+           elif current_position["direction"] == "SHORT":
+               # Если цена на свече поднималась до стопа или выше
+               if high_price >= current_position["stop_loss"]:
+                   is_sl_triggered = True
+                   exit_price_sl = max(current_position["entry_price"], current_position["stop_loss"])
  
+       if is_sl_triggered:
+           # Считаем убыток (он будет в районе -1000 ₽)
+           result = calculate_trade_result(
+               current_position["direction"],
+               current_position["entry_price"],
+               exit_price_sl
+           )
+ 
+           if result is not None:
+               trade = {
+                   "id": len(trades) + 1,
+                   "instrument": instrument,
+                   "title": title,
+                   "direction": current_position["direction"],
+                   "entry_time": current_position["entry_time"],
+                   "exit_time": candle_time,
+                   "entry_price": round(current_position["entry_price"], 8),
+                   "exit_price": round(exit_price_sl, 8),
+                   "exit_signal": "STOP_LOSS",  # Помечаем, что это защитный выход
+                   **result
+               }
+               trades.append(trade)
+ 
+           # После стопа позиция закрыта, новую сразу не открываем — ждем следующий паттерн
+           current_position = None
            continue
  
        # ----------------------------------------------------
-       # Если пришел противоположный сигнал
-       # Закрываем текущую позицию
+       # Если пришел тот же сигнал — ничего не делаем
        # ----------------------------------------------------
+       if signal == current_position["direction"]:
+           continue
  
+       # ----------------------------------------------------
+       # Если пришел противоположный сигнал — закрываем текущую позицию
+       # ----------------------------------------------------
        opposite_signal = (
            current_position[
                "direction"
@@ -1273,20 +1311,21 @@ def build_strategy_history(
                trade
            )
  
-           # ------------------------------------------------
-           # Сразу открываем новую позицию
-           # по противоположному сигналу
-           # ------------------------------------------------
+           # Сразу открываем новую позицию по противоположному сигналу
+           # Рассчитываем для неё новый уровень Стоп-Лосса
+           stop_loss_level = analysis.get("stop_loss")
  
            current_position = {
                "instrument": instrument,
                "title": title,
                "direction": signal,
                "entry_price": price,
-               "entry_time": candle_time
+               "entry_time": candle_time,
+               "stop_loss": stop_loss_level
            }
  
    return trades, current_position
+
  
  
 # ============================================================
