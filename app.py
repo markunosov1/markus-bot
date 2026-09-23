@@ -167,7 +167,7 @@ def api_post(url, payload):
  
  
 # ============================================================
-# ПОЛУЧЕНИЕ ВСЕХ ФЬЮЧЕРСОВ
+# ПОЛУЧЕНИЕ ВСЕХ АКЦИИ
 # ============================================================
  
 def get_all_shares():
@@ -1005,7 +1005,7 @@ def calculate_statistics(
  
  
 # ============================================================
-# АНАЛИЗ ОДНОГО ФЬЮЧЕРСА
+# АНАЛИЗ ОДНОЙ АКЦИИ (ОБНОВЛЕННЫЙ ДВИЖОК)
 # ============================================================
  
 def get_future_status(
@@ -1013,10 +1013,21 @@ def get_future_status(
    title,
    emoji
 ):
+   # Карта переключения старых префиксов на новые тикеры акций
+   legacy_assets = {
+       "CR": "SBER",  # Вместо Юаня берем Сбербанк
+       "GD": "GAZP",  # Вместо Золота берем Газпром
+       "BR": "LKOH",  # Вместо Нефти берем Лукойл
+       "NG": "NVTK",  # Вместо Газа берем Новатэк
+       "MX": "YNDX",  # Вместо Индекса берем Яндекс
+       "SV": "ROSN"   # Вместо Серебра берем Роснефть
+   }
+   
+   target_ticker = legacy_assets.get(prefix.upper(), prefix.upper())
  
    result = {
        "prefix": prefix,
-       "title": title,
+       "title": f"{emoji} {title}", # Дефолтный заголовок на случай ошибки
        "emoji": emoji,
        "status": "Ошибка",
        "message": "",
@@ -1034,31 +1045,23 @@ def get_future_status(
    }
  
    try:
+       # Вызываем функцию поиска акции на рынке спот
+       share_info = find_active_share(target_ticker)
  
-       future = find_active_future(
-           prefix
-       )
- 
-       if not future:
- 
+       if not share_info:
            result["message"] = (
-               "Актуальный контракт не найден"
+               f"Акция {target_ticker} не найдена в каталоге"
            )
- 
            return result
  
-       result["ticker"] = future[
-           "ticker"
-       ]
+       # Меняем заголовок карточки на РЕАЛЬНОЕ название компании из Т-Банка!
+       result["title"] = f"{emoji} {share_info['name']}"
+       result["ticker"] = share_info["ticker"]
+       result["uid"] = share_info["instrument_uid"]
  
-       result["uid"] = future[
-           "instrument_uid"
-       ]
- 
+       # Загружаем и нормализуем 4-часовые свечи по UID акции
        candles_raw = get_candles(
-           future[
-               "instrument_uid"
-           ]
+           share_info["instrument_uid"]
        )
  
        candles = normalize_candles(
@@ -1070,43 +1073,36 @@ def get_future_status(
        )
  
        if not candles:
- 
            result["message"] = (
                "Свечей 0"
            )
- 
            return result
  
        # ----------------------------------------------------
-       # Текущий сигнал
+       # Текущий сигнал стратегии Price Action + Стоп-Лосс
        # ----------------------------------------------------
- 
        strategy = analyze_strategy(
            candles
        )
  
        result["strategy"] = strategy
- 
        result["status"] = "OK"
- 
        result["message"] = (
            "Данные получены"
        )
  
        # ----------------------------------------------------
-       # История стратегии
+       # История стратегии с учетом лимита Стоп-Лосса 1000 ₽
        # ----------------------------------------------------
- 
        trades, open_position = (
            build_strategy_history(
                candles,
-               prefix,
-               title
+               share_info["ticker"],
+               share_info["name"]
            )
        )
  
        result["history"] = trades
- 
        result["open_position"] = (
            open_position
        )
@@ -1120,62 +1116,27 @@ def get_future_status(
        return result
  
    except Exception as e:
- 
        log.exception(
-           "Ошибка %s",
+           "Ошибка обработки акции %s",
            title
        )
- 
        result["message"] = str(e)
- 
        return result
  
  
 # ============================================================
-# ОБЩИЙ СБОР ДАННЫХ
+# ОБЩИЙ СБОР ДАННЫХ ПО ПОРТФЕЛЮ АКЦИЙ
 # ============================================================
  
 def collect_data():
- 
+   # Передаем старые маркеры, но бэкенд на лету свяжет их с крупнейшими компаниями РФ
    futures = [
-       get_future_status(
-           "CR",
-           "Юань",
-           "¥"
-       ),
- 
-       get_future_status(
-           "GD",
-           "Золото",
-           "🥇"
-       ),
- 
-       get_future_status(
-           "BR",
-           "Нефть Brent",
-           "🛢️"
-       ),
-
-       # -------------------------
-       # НОВЫЕ ФЬЮЧЕРСЫ
-       # -------------------------
-       get_future_status(
-           "NG",
-           "Природный газ",
-           "🔥"
-       ),
- 
-       get_future_status(
-           "MX",
-           "Индекс МосБиржи",
-           "📈"
-       ),
- 
-       get_future_status(
-           "SV",
-           "Серебро",
-           "🥈"
-       )
+       get_future_status("CR", "Сбербанк", "🟢"),
+       get_future_status("GD", "Газпром", "🔵"),
+       get_future_status("BR", "Лукойл", "🔴"),
+       get_future_status("NG", "Новатэк", "🔥"),
+       get_future_status("MX", "Яндекс", "🟡"),
+       get_future_status("SV", "Роснефть", "🛢️")
    ]
  
    last_signal = {
@@ -1185,56 +1146,24 @@ def collect_data():
        "description": ""
    }
  
-   # Если есть текущий сигнал,
-   # показываем его
+   # Если есть текущий разворотный сигнал, выводим его в топ
    for item in futures:
- 
-       signal = item[
-           "strategy"
-       ].get(
-           "signal"
-       )
- 
-       if signal in (
-           "LONG",
-           "SHORT"
-       ):
- 
-           last_signal = {
-               "title":
-                   item["title"],
- 
-               "signal":
-                   signal,
- 
-               "direction":
-                   item["strategy"].get(
-                       "direction",
-                       "—"
-                   ),
- 
-               "description":
-                   item["strategy"].get(
-                       "description",
-                       ""
-                   )
-           }
- 
-           break
-
-   # ВАЖНО: Не забудьте вернуть собранные данные в конце функции!
-   # (Обычно здесь идет return futures, last_signal или объект/словарь)
-   # Оставьте оригинальную строку return, которая была в вашей функции ниже цикла.
-
+       if "strategy" in item:
+           signal = item["strategy"].get("signal")
+           if signal in ("LONG", "SHORT"):
+               last_signal = {
+                   "title": item["title"],
+                   "signal": signal,
+                   "direction": item["strategy"].get("direction", "—"),
+                   "description": item["strategy"].get("description", "")
+               }
+               break
  
    # --------------------------------------------------------
-   # Общая статистика
+   # Общая статистика по всем закрытым сделкам
    # --------------------------------------------------------
- 
    all_trades = []
- 
    for item in futures:
- 
        all_trades.extend(
            item.get(
                "history",
@@ -1249,61 +1178,42 @@ def collect_data():
    )
  
    # --------------------------------------------------------
-   # Сохраняем историю
+   # Накопление истории сделок в JSON
    # --------------------------------------------------------
- 
-   # Чтобы файл не разрастался бесконечно,
-   # сохраняем последние 5000 закрытых сделок.
- 
    existing_history = load_history()
- 
    existing_keys = set()
  
    for trade in existing_history:
- 
        key = (
            trade.get("instrument"),
            trade.get("entry_time"),
            trade.get("exit_time"),
            trade.get("direction")
        )
- 
        existing_keys.add(key)
  
    for trade in all_trades:
- 
        key = (
            trade.get("instrument"),
            trade.get("entry_time"),
            trade.get("exit_time"),
            trade.get("direction")
        )
- 
        if key not in existing_keys:
+           existing_history.append(trade)
+           existing_keys.add(key)
  
-           existing_history.append(
-               trade
-           )
+   existing_history = existing_history[-5000:]
+   save_history(existing_history)
  
-           existing_keys.add(
-               key
-           )
- 
-   existing_history = existing_history[
-       -5000:
-   ]
- 
-   save_history(
-       existing_history
-   )
- 
+   # Возвращаем готовую структуру для Flask-сервера
    return {
        "updated":
            datetime.now(
                timezone.utc
            ).isoformat(),
  
-       "futures":
+       "futures":  # Оставляем ключ "futures", чтобы фронтенд-шаблон HTML не сломался
            futures,
  
        "last_signal":
@@ -1324,11 +1234,11 @@ def collect_data():
  
            "tax":
                TAX_PERCENT,
- 
            "exit_rule":
-               "Противоположный сигнал"
+               "Противоположный сигнал / Stop-Loss 1000₽"
        }
    }
+
  
  
 # ============================================================
