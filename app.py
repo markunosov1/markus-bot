@@ -13,63 +13,50 @@ from flask import Flask, jsonify, render_template_string
  
  
 # ============================================================
-# MARKUS TRADE
+# MARKUS TRADE — НАСТРОЙКИ РЫНКА АКЦИЙ
 # ============================================================
- 
 APP_NAME = "Markus Trade"
- 
-API_BASE = "https://invest-public-api.tbank.ru/rest"
- 
+API_BASE = "https://tbank.ru"
+
 FIND_INSTRUMENT_URL = (
    API_BASE +
    "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
 )
- 
-FUTURES_URL = (
+
+# Заменяем FUTURES_URL на SHARES_URL
+SHARES_URL = (
    API_BASE +
-   "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
+   "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Shares"
 )
- 
+
 CANDLES_URL = (
    API_BASE +
    "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles"
 )
- 
- 
-# ============================================================
-# НАСТРОЙКИ
-# ============================================================
- 
+
 REQUEST_TIMEOUT = 30
- 
-# Таймфрейм
+
+# Таймфрейм: 4 часа
 CANDLE_INTERVAL = "CANDLE_INTERVAL_4_HOUR"
- 
-# Сколько часов свечей загружать
+
+# Сколько часов свечей загружать (60 дней — оптимально для 4-часовиков)
 HISTORY_HOURS = 24 * 60
- 
-# Как часто обновлять данные
+
+# Как часто обновлять данные (10 минут)
 UPDATE_SECONDS = 600
- 
+
 # ============================================================
 # ТОРГОВЫЕ НАСТРОЙКИ
 # ============================================================
- 
-# Размер одной виртуальной сделки
 POSITION_SIZE_RUBLES = 100000.0
- 
-# Комиссия при покупке
-BUY_COMMISSION_PERCENT = 0.02
- 
-# Комиссия при продаже
-SELL_COMMISSION_PERCENT = 0.02
- 
-# Налог
+
+# Реалистичные комиссии для спот-рынка акций Т-Банка
+BUY_COMMISSION_PERCENT = 0.03
+SELL_COMMISSION_PERCENT = 0.03
 TAX_PERCENT = 13.0
- 
- 
-# Файл истории
+
 HISTORY_FILE = "trade_history.json"
+
 
  
 # ============================================================
@@ -183,40 +170,23 @@ def api_post(url, payload):
 # ПОЛУЧЕНИЕ ВСЕХ ФЬЮЧЕРСОВ
 # ============================================================
  
-def get_all_futures():
- 
+def get_all_shares():
    payload = {
        "instrumentStatus": "INSTRUMENT_STATUS_BASE"
    }
- 
    try:
- 
-       data = api_post(
-           FUTURES_URL,
-           payload
-       )
- 
+       data = api_post(SHARES_URL, payload)
    except Exception:
- 
        payload = {
            "instrumentStatus": "INSTRUMENT_STATUS_ALL"
        }
- 
-       data = api_post(
-           FUTURES_URL,
-           payload
-       )
- 
-   futures = data.get(
-       "futures",
-       []
-   )
- 
-   if not isinstance(futures, list):
-       futures = []
- 
-   return futures
- 
+       data = api_post(SHARES_URL, payload)
+
+   shares = data.get("instruments", [])
+   if not isinstance(shares, list):
+       shares = []
+   return shares
+
  
 # ============================================================
 # ПОЛУЧЕНИЕ СТРОКИ
@@ -403,219 +373,31 @@ def matches_future(future, prefix):
 # ПОИСК АКТУАЛЬНОГО ФЬЮЧЕРСА
 # ============================================================
  
-def find_active_future(prefix):
- 
-   queries = [
-       prefix
-   ]
- 
-   if prefix == "CR":
- 
-       queries = [
-           "CR",
-           "CNY",
-           "юань",
-           "CNY/RUB"
-       ]
- 
-   elif prefix == "GD":
- 
-       queries = [
-           "GD",
-           "GOLD",
-           "золото"
-       ]
- 
-   elif prefix == "BR":
- 
-       queries = [
-           "BR",
-           "BRENT",
-           "нефть"
-       ]
-
-   elif prefix == "NG":
- 
-       queries = [
-           "NG",
-           "газ",
-           "Natural Gas"
-       ]
-
-   elif prefix == "MX":
- 
-       queries = [
-           "MX",
-           "MIX",
-           "Индекс МосБиржи",
-           "IMOEX"
-       ]
-
-   elif prefix == "SV":
- 
-       queries = [
-           "SV",
-           "серебро",
-           "Silver"
-       ]
- 
-   candidates = []
- 
-   now = datetime.now(
-       timezone.utc
-   )
- 
-   for query in queries:
- 
-       try:
- 
-           payload = {
-               "query": query,
-               "instrumentKind":
-                   "INSTRUMENT_TYPE_FUTURES",
-               "apiTradeAvailableFlag": True
-           }
- 
-           data = api_post(
-               FIND_INSTRUMENT_URL,
-               payload
-           )
- 
-       except Exception as e:
- 
-           log.warning(
-               "Ошибка FindInstrument %s: %s",
-               query,
-               e
-           )
- 
-           continue
- 
-       instruments = data.get(
-           "instruments",
-           []
-       )
- 
-       if not isinstance(
-           instruments,
-           list
-       ):
-           continue
- 
+def find_active_share(ticker_name):
+   try:
+       payload = {
+           "query": ticker_name,
+           "instrumentKind": "INSTRUMENT_TYPE_SHARE",
+           "apiTradeAvailableFlag": True
+       }
+       data = api_post(FIND_INSTRUMENT_URL, payload)
+       instruments = data.get("instruments", [])
+       
        for item in instruments:
- 
-           if not isinstance(
-               item,
-               dict
-           ):
-               continue
- 
-           if not matches_future(
-               item,
-               prefix
-           ):
-               continue
- 
-           instrument_uid = (
-               item.get("instrumentUid")
-               or item.get("uid")
-           )
- 
-           if not instrument_uid:
-               continue
- 
-           ticker = get_string(
-               item,
-               "ticker"
-           )
- 
-           name = get_string(
-               item,
-               "name"
-           )
- 
-           first_trade = parse_date(
-               item.get("firstTradeDate")
-           )
- 
-           last_trade = parse_date(
-               item.get("lastTradeDate")
-           )
- 
-           # Еще не начался
-           if first_trade and now < first_trade:
-               continue
- 
-           # Уже закончился
-           if last_trade and now > last_trade:
-               continue
- 
-           candidates.append(
-               {
-                   "ticker": ticker,
-                   "name": name,
+           if get_string(item, "ticker").upper() == ticker_name.upper():
+               instrument_uid = item.get("instrumentUid") or item.get("uid")
+               return {
+                   "ticker": get_string(item, "ticker"),
+                   "name": get_string(item, "name"),
                    "uid": instrument_uid,
                    "instrument_uid": instrument_uid,
-                   "first_trade": first_trade,
-                   "last_trade": last_trade,
-                   "class_code":
-                       get_string(
-                           item,
-                           "classCode"
-                       ),
-                   "basic_asset":
-                       get_string(
-                           item,
-                           "basicAsset"
-                       )
+                   "class_code": get_string(item, "classCode"),
+                   "basic_asset": ""
                }
-           )
- 
-   # Убираем дубликаты
-   unique = {}
- 
-   for item in candidates:
- 
-       unique[
-           item["instrument_uid"]
-       ] = item
- 
-   candidates = list(
-       unique.values()
-   )
- 
-   if not candidates:
- 
-       return None
- 
-   # Сначала выбираем ближайший срок окончания
-   def expiry_key(item):
- 
-       dt = item.get(
-           "last_trade"
-       )
- 
-       if dt:
-           return dt
- 
-       return datetime.max.replace(
-           tzinfo=timezone.utc
-       )
- 
-   candidates.sort(
-       key=expiry_key
-   )
- 
-   selected = candidates[0]
- 
-   log.info(
-       "Выбран фьючерс %s | %s | UID=%s",
-       selected["ticker"],
-       selected["name"],
-       selected["instrument_uid"]
-   )
- 
-   return selected
+   except Exception as e:
+       log.error("Ошибка поиска акции %s: %s", ticker_name, e)
+   return None
+
 
 
  
@@ -784,73 +566,34 @@ def normalize_candles(candles):
 # ============================================================
 # ТВОЯ СТРАТЕГИЯ
 # ============================================================
- 
-def analyze_strategy(candles):
- 
+ def analyze_strategy(candles):
    if len(candles) < 8:
- 
        return {
            "signal": "Нет сигналов",
            "direction": "—",
-           "description":
-               "Недостаточно свечей"
+           "description": "Недостаточно свечей"
        }
- 
+
    last = candles[-8:]
- 
-   highs = [
-       x["high"]
-       for x in last
-   ]
- 
-   lows = [
-       x["low"]
-       for x in last
-   ]
- 
-   closes = [
-       x["close"]
-       for x in last
-   ]
- 
-   # Цена потенциального входа — это цена закрытия последней свечи
+   highs = [x["high"] for x in last]
+   lows = [x["low"] for x in last]
+   closes = [x["close"] for x in last]
    entry_price = closes[-1]
- 
-   # ========================================================
-   # SHORT PATTERN
-   # ========================================================
+
+   # Паттерн SHORT (Импульсное истощение покупателей)
    short_pattern = (
-       highs[3] > highs[2]
-       and
-       highs[4] > highs[3]
-       and
-       highs[5] > highs[4]
-       and
-       closes[-1] < closes[-2]
-       and
-       closes[-2] < closes[-3]
+       highs[3] > highs[2] and highs[4] > highs[3] and highs[5] > highs[4] and
+       closes[-1] < closes[-2] and closes[-2] < closes[-3]
    )
- 
-   # ========================================================
-   # LONG PATTERN
-   # ========================================================
+
+   # Паттерн LONG (Выкуп панических распродаж)
    long_pattern = (
-       lows[3] < lows[2]
-       and
-       lows[4] < lows[3]
-       and
-       lows[5] < lows[4]
-       and
-       closes[-1] > closes[-2]
-       and
-       closes[-2] > closes[-3]
+       lows[3] < lows[2] and lows[4] < lows[3] and lows[5] < lows[4] and
+       closes[-1] > closes[-2] and closes[-2] > closes[-3]
    )
- 
+
    if short_pattern:
-       # Для SHORT убыток наступает при росте цены. 
-       # Ограничиваем убыток в 1000 рублей (1% от 100 000 рублей объема)
-       stop_loss_price = entry_price * 1.01
- 
+       stop_loss_price = entry_price * 1.01  # Убыток при росте цены на 1%
        return {
            "signal": "SHORT",
            "direction": "Вниз",
@@ -858,12 +601,9 @@ def analyze_strategy(candles):
            "entry_price": entry_price,
            "stop_loss": round(stop_loss_price, 4)
        }
- 
+
    if long_pattern:
-       # Для LONG убыток наступает при падении цены.
-       # Ограничиваем убыток в 1000 рублей (1% от 100 000 рублей объема)
-       stop_loss_price = entry_price * 0.99
- 
+       stop_loss_price = entry_price * 0.99  # Убыток при падении цены на 1%
        return {
            "signal": "LONG",
            "direction": "Вверх",
@@ -871,13 +611,13 @@ def analyze_strategy(candles):
            "entry_price": entry_price,
            "stop_loss": round(stop_loss_price, 4)
        }
- 
+
    return {
        "signal": "Нет сигналов",
        "direction": "—",
-       "description":
-           "Сигнал не сформирован"
+       "description": "Сигнал не сформирован"
    }
+
 
 # ============================================================
 # ИСТОРИЯ
@@ -1117,97 +857,58 @@ def calculate_trade_result(
 # противоположный сигнал
 # ============================================================
  
-def build_strategy_history(
-   candles,
-   instrument,
-   title
-):
- 
+def build_strategy_history(candles, instrument, title):
    if len(candles) < 8:
        return [], None
- 
+
    trades = []
    current_position = None
- 
-   # Последний индекс свечи
-   for i in range(
-       7,
-       len(candles)
-   ):
- 
-       window = candles[
-           i - 7:i + 1
-       ]
- 
-       analysis = analyze_strategy(
-           window
-       )
- 
-       signal = analysis[
-           "signal"
-         ]
 
+   for i in range(7, len(candles)):
+       window = candles[i - 7:i + 1]
+       analysis = analyze_strategy(window)
+       signal = analysis["signal"]
        candle = candles[i]
        price = candle["close"]
        candle_time = candle["time"]
        
-       # Берем экстремумы текущей свечи для точной проверки Стоп-Лосса
        high_price = candle.get("high", price)
        low_price = candle.get("low", price)
- 
-       # ----------------------------------------------------
-       # Если позиции нет
-       # ----------------------------------------------------
+
        if current_position is None:
- 
-           if signal in (
-               "LONG",
-               "SHORT"
-           ):
-               # Извлекаем рассчитанный Стоп-Лосс из нашей обновленной стратегии
-               stop_loss_level = analysis.get("stop_loss")
- 
+           if signal in ("LONG", "SHORT"):
                current_position = {
                    "instrument": instrument,
                    "title": title,
                    "direction": signal,
                    "entry_price": price,
                    "entry_time": candle_time,
-                   "stop_loss": stop_loss_level  # Сохраняем цену защиты
+                   "stop_loss": analysis.get("stop_loss")
                }
- 
            continue
- 
-       # ----------------------------------------------------
-       # ПРОВЕРКА СТОП-ЛОССА (Досрочный выход) — Новое!
-       # ----------------------------------------------------
+
+       # Проверка срабатывания Стоп-Лосса
        is_sl_triggered = False
        exit_price_sl = price
- 
+
        if current_position["stop_loss"] is not None:
            if current_position["direction"] == "LONG":
-               # Если цена на свече опускалась до стопа или ниже
                if low_price <= current_position["stop_loss"]:
                    is_sl_triggered = True
-                   # Выходим по цене стопа (или по закрытию, если был резкий гэп)
                    exit_price_sl = min(current_position["entry_price"], current_position["stop_loss"])
-                   
            elif current_position["direction"] == "SHORT":
-               # Если цена на свече поднималась до стопа или выше
                if high_price >= current_position["stop_loss"]:
                    is_sl_triggered = True
                    exit_price_sl = max(current_position["entry_price"], current_position["stop_loss"])
- 
+
        if is_sl_triggered:
-           # Считаем убыток (он будет в районе -1000 ₽)
            result = calculate_trade_result(
                current_position["direction"],
                current_position["entry_price"],
                exit_price_sl
            )
- 
            if result is not None:
-               trade = {
+               trades.append({
                    "id": len(trades) + 1,
                    "instrument": instrument,
                    "title": title,
@@ -1216,114 +917,53 @@ def build_strategy_history(
                    "exit_time": candle_time,
                    "entry_price": round(current_position["entry_price"], 8),
                    "exit_price": round(exit_price_sl, 8),
-                   "exit_signal": "STOP_LOSS",  # Помечаем, что это защитный выход
+                   "exit_signal": "STOP_LOSS",
                    **result
-               }
-               trades.append(trade)
- 
-           # После стопа позиция закрыта, новую сразу не открываем — ждем следующий паттерн
+               })
            current_position = None
            continue
- 
-       # ----------------------------------------------------
-       # Если пришел тот же сигнал — ничего не делаем
-       # ----------------------------------------------------
+
        if signal == current_position["direction"]:
            continue
- 
-       # ----------------------------------------------------
-       # Если пришел противоположный сигнал — закрываем текущую позицию
-       # ----------------------------------------------------
+
        opposite_signal = (
-           current_position[
-               "direction"
-           ] == "LONG"
-           and
-           signal == "SHORT"
+           current_position["direction"] == "LONG" and signal == "SHORT"
        ) or (
-           current_position[
-               "direction"
-           ] == "SHORT"
-           and
-           signal == "LONG"
+           current_position["direction"] == "SHORT" and signal == "LONG"
        )
- 
+
        if opposite_signal:
- 
            result = calculate_trade_result(
-               current_position[
-                   "direction"
-               ],
-               current_position[
-                   "entry_price"
-               ],
+               current_position["direction"],
+               current_position["entry_price"],
                price
            )
- 
            if result is None:
                current_position = None
                continue
- 
-           trade = {
-               "id":
-                   len(trades) + 1,
- 
-               "instrument":
-                   instrument,
- 
-               "title":
-                   title,
- 
-               "direction":
-                   current_position[
-                       "direction"
-                   ],
- 
-               "entry_time":
-                   current_position[
-                       "entry_time"
-                   ],
- 
-               "exit_time":
-                   candle_time,
- 
-               "entry_price":
-                   round(
-                       current_position[
-                           "entry_price"
-                       ],
-                       8
-                   ),
- 
-               "exit_price":
-                   round(
-                       price,
-                       8
-                   ),
- 
-               "exit_signal":
-                   signal,
- 
+
+           trades.append({
+               "id": len(trades) + 1,
+               "instrument": instrument,
+               "title": title,
+               "direction": current_position["direction"],
+               "entry_time": current_position["entry_time"],
+               "exit_time": candle_time,
+               "entry_price": round(current_position["entry_price"], 8),
+               "exit_price": round(price, 8),
+               "exit_signal": signal,
                **result
-           }
- 
-           trades.append(
-               trade
-           )
- 
-           # Сразу открываем новую позицию по противоположному сигналу
-           # Рассчитываем для неё новый уровень Стоп-Лосса
-           stop_loss_level = analysis.get("stop_loss")
- 
+           })
+
            current_position = {
                "instrument": instrument,
                "title": title,
                "direction": signal,
                "entry_price": price,
                "entry_time": candle_time,
-               "stop_loss": stop_loss_level
+               "stop_loss": analysis.get("stop_loss")
            }
- 
+
    return trades, current_position
 
  
