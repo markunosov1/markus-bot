@@ -346,6 +346,55 @@ def matches_future(future, prefix):
            word in text
            for word in keywords
        )
+
+   # -------------------------
+   # ПРИРОДНЫЙ ГАЗ (NG) — Новое!
+   # -------------------------
+   if prefix == "NG":
+ 
+       keywords = [
+           "NG",
+           "NATURAL GAS",
+           "ГАЗ"
+       ]
+ 
+       return any(
+           word in text
+           for word in keywords
+       )
+
+   # -------------------------
+   # ИНДЕКС МОСБИРЖИ (MX) — Новое!
+   # -------------------------
+   if prefix == "MX":
+ 
+       keywords = [
+           "MX",
+           "IMOEX",
+           "ИНДЕКС МОС",
+           "МОСБИРЖ"
+       ]
+ 
+       return any(
+           word in text
+           for word in keywords
+       )
+
+   # -------------------------
+   # СЕРЕБРО (SV) — Новое!
+   # -------------------------
+   if prefix == "SV":
+ 
+       keywords = [
+           "SV",
+           "SILVER",
+           "СЕРЕБР"
+       ]
+ 
+       return any(
+           word in text
+           for word in keywords
+       )
  
    return False
  
@@ -383,6 +432,31 @@ def find_active_future(prefix):
            "BR",
            "BRENT",
            "нефть"
+       ]
+
+   elif prefix == "NG":
+ 
+       queries = [
+           "NG",
+           "газ",
+           "Natural Gas"
+       ]
+
+   elif prefix == "MX":
+ 
+       queries = [
+           "MX",
+           "MIX",
+           "Индекс МосБиржи",
+           "IMOEX"
+       ]
+
+   elif prefix == "SV":
+ 
+       queries = [
+           "SV",
+           "серебро",
+           "Silver"
        ]
  
    candidates = []
@@ -542,7 +616,7 @@ def find_active_future(prefix):
    )
  
    return selected
- 
+
  
 # ============================================================
 # ПОЛУЧЕНИЕ СВЕЧЕЙ
