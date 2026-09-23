@@ -566,7 +566,7 @@ def normalize_candles(candles):
 # ============================================================
 # ТВОЯ СТРАТЕГИЯ
 # ============================================================
- def analyze_strategy(candles):
+def analyze_strategy(candles):
    if len(candles) < 8:
        return {
            "signal": "Нет сигналов",
