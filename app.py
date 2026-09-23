@@ -257,42 +257,34 @@ def matches_future(future, prefix):
     if prefix in legacy_mapping:
         prefix = legacy_mapping[prefix]
         
-    return prefix in ticker
-
-
-# ============================================================
-# ПОИСК АКТИВНОЙ АКЦИИ ПО ТИКЕРУ (НОВЫЙ ДВИЖОК)
-# ============================================================
+    return 
  
 # ============================================================
-# ИСПРАВЛЕННЫЙ ПОИСК АКЦИИ В КАТАЛОГЕ Т-БАНКА
+# ПРЯМОЙ И НАДЕЖНЫЙ ПОИСК АКЦИИ ПО БАЗЕ Т-БАНКА
 # ============================================================
  
 def find_active_share(ticker_name):
    try:
-       # Используем более мягкий поисковый запрос, который Т-Банк API
-       # гарантированно сопоставит с тикером на Московской бирже
+       # Запрашиваем полный базовый список акций Мосбиржи напрямую через SharesService
        payload = {
-           "query": str(ticker_name).upper(),
-           "instrumentKind": "INSTRUMENT_TYPE_SHARE",
-           "apiTradeAvailableFlag": False  # Убираем жесткий флаг доступности к торгам на случай выходных/вечерней сессии
+           "instrumentStatus": "INSTRUMENT_STATUS_BASE"
        }
        
-       data = api_post(FIND_INSTRUMENT_URL, payload)
+       # Используем эндпоинт SHARES_URL, настроенный в начале файла
+       data = api_post(SHARES_URL, payload)
        instruments = data.get("instruments", [])
        
-       # Если через FindInstrument ничего не нашлось, делаем резервный запрос
        if not instruments:
-           payload["instrumentKind"] = "INSTRUMENT_KIND_SHARE" # Проверяем альтернативный тип Enum
-           data = api_post(FIND_INSTRUMENT_URL, payload)
+           # Резервный запрос всех акций, если базовые временно скрыты
+           payload["instrumentStatus"] = "INSTRUMENT_STATUS_ALL"
+           data = api_post(SHARES_URL, payload)
            instruments = data.get("instruments", [])
 
+       # Бежим по всей официальной базе акций брокера и ищем точный тикер
        for item in instruments:
            ticker = get_string(item, "ticker").upper()
-           name = get_string(item, "name").upper()
            
-           # Проверяем строгое совпадение по тикеру
-           if ticker == ticker_name.upper():
+           if ticker == str(ticker_name).upper():
                instrument_uid = item.get("instrumentUid") or item.get("uid")
                return {
                    "ticker": get_string(item, "ticker"),
@@ -303,21 +295,8 @@ def find_active_share(ticker_name):
                    "basic_asset": ""
                }
                
-       # Резервный шаг: если точное совпадение не сработало, берем первый инструмент, где тикер содержится внутри
-       if instruments:
-           item = instruments[0]
-           instrument_uid = item.get("instrumentUid") or item.get("uid")
-           return {
-               "ticker": get_string(item, "ticker"),
-               "name": get_string(item, "name"),
-               "uid": instrument_uid,
-               "instrument_uid": instrument_uid,
-               "class_code": get_string(item, "classCode"),
-               "basic_asset": ""
-           }
-           
    except Exception as e:
-       log.error("Ошибка поиска акции %s: %s", ticker_name, e)
+       log.error("Ошибка прямого поиска акции %s: %s", ticker_name, e)
        
    return None
 
@@ -346,10 +325,6 @@ def find_active_future(prefix):
     target_ticker = legacy_assets.get(prefix_upper, prefix_upper)
     return find_active_share(target_ticker)
 
-
-
-
- 
 # ============================================================
 # ПОЛУЧЕНИЕ СВЕЧЕЙ
 # ============================================================
