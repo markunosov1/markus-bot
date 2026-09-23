@@ -43,13 +43,13 @@ CANDLES_URL = (
 REQUEST_TIMEOUT = 30
  
 # Таймфрейм
-CANDLE_INTERVAL = "CANDLE_INTERVAL_15_MIN"
+CANDLE_INTERVAL = "CANDLE_INTERVAL_4_HOUR"
  
 # Сколько часов свечей загружать
-HISTORY_HOURS = 24 * 14
+HISTORY_HOURS = 24 * 60
  
 # Как часто обновлять данные
-UPDATE_SECONDS = 300
+UPDATE_SECONDS = 600
  
 # ============================================================
 # ТОРГОВЫЕ НАСТРОЙКИ
@@ -59,10 +59,10 @@ UPDATE_SECONDS = 300
 POSITION_SIZE_RUBLES = 100000.0
  
 # Комиссия при покупке
-BUY_COMMISSION_PERCENT = 0.10
+BUY_COMMISSION_PERCENT = 0.02
  
 # Комиссия при продаже
-SELL_COMMISSION_PERCENT = 0.10
+SELL_COMMISSION_PERCENT = 0.02
  
 # Налог
 TAX_PERCENT = 13.0
@@ -70,7 +70,7 @@ TAX_PERCENT = 13.0
  
 # Файл истории
 HISTORY_FILE = "trade_history.json"
- 
+
  
 # ============================================================
 # ОТКЛЮЧАЕМ ЛИШНИЕ SSL WARNING
