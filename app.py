@@ -2531,3 +2531,4 @@ id="history"
 Комиссия продажи:
 
 <span id="sellCommission">
+"""
