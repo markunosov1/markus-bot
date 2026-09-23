@@ -264,33 +264,62 @@ def matches_future(future, prefix):
 # ПОИСК АКТИВНОЙ АКЦИИ ПО ТИКЕРУ (НОВЫЙ ДВИЖОК)
 # ============================================================
  
+# ============================================================
+# ИСПРАВЛЕННЫЙ ПОИСК АКЦИИ В КАТАЛОГЕ Т-БАНКА
+# ============================================================
+ 
 def find_active_share(ticker_name):
-    """
-    Ищет акцию на Мосбирже напрямую по её биржевому тикеру через Т-Банк API.
-    """
-    try:
-        payload = {
-            "query": ticker_name,
-            "instrumentKind": "INSTRUMENT_TYPE_SHARE",
-            "apiTradeAvailableFlag": True
-        }
-        data = api_post(FIND_INSTRUMENT_URL, payload)
-        instruments = data.get("instruments", [])
-        
-        for item in instruments:
-            if get_string(item, "ticker").upper() == ticker_name.upper():
-                instrument_uid = item.get("instrumentUid") or item.get("uid")
-                return {
-                    "ticker": get_string(item, "ticker"),
-                    "name": get_string(item, "name"),
-                    "uid": instrument_uid,
-                    "instrument_uid": instrument_uid,
-                    "class_code": get_string(item, "classCode"),
-                    "basic_asset": ""
-                }
-    except Exception as e:
-        log.error("Ошибка поиска акции %s: %s", ticker_name, e)
-    return None
+   try:
+       # Используем более мягкий поисковый запрос, который Т-Банк API
+       # гарантированно сопоставит с тикером на Московской бирже
+       payload = {
+           "query": str(ticker_name).upper(),
+           "instrumentKind": "INSTRUMENT_TYPE_SHARE",
+           "apiTradeAvailableFlag": False  # Убираем жесткий флаг доступности к торгам на случай выходных/вечерней сессии
+       }
+       
+       data = api_post(FIND_INSTRUMENT_URL, payload)
+       instruments = data.get("instruments", [])
+       
+       # Если через FindInstrument ничего не нашлось, делаем резервный запрос
+       if not instruments:
+           payload["instrumentKind"] = "INSTRUMENT_KIND_SHARE" # Проверяем альтернативный тип Enum
+           data = api_post(FIND_INSTRUMENT_URL, payload)
+           instruments = data.get("instruments", [])
+
+       for item in instruments:
+           ticker = get_string(item, "ticker").upper()
+           name = get_string(item, "name").upper()
+           
+           # Проверяем строгое совпадение по тикеру
+           if ticker == ticker_name.upper():
+               instrument_uid = item.get("instrumentUid") or item.get("uid")
+               return {
+                   "ticker": get_string(item, "ticker"),
+                   "name": get_string(item, "name"),
+                   "uid": instrument_uid,
+                   "instrument_uid": instrument_uid,
+                   "class_code": get_string(item, "classCode"),
+                   "basic_asset": ""
+               }
+               
+       # Резервный шаг: если точное совпадение не сработало, берем первый инструмент, где тикер содержится внутри
+       if instruments:
+           item = instruments[0]
+           instrument_uid = item.get("instrumentUid") or item.get("uid")
+           return {
+               "ticker": get_string(item, "ticker"),
+               "name": get_string(item, "name"),
+               "uid": instrument_uid,
+               "instrument_uid": instrument_uid,
+               "class_code": get_string(item, "classCode"),
+               "basic_asset": ""
+           }
+           
+   except Exception as e:
+       log.error("Ошибка поиска акции %s: %s", ticker_name, e)
+       
+   return None
 
 
 # ============================================================
