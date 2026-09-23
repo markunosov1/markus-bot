@@ -233,170 +233,90 @@ def parse_date(value):
  
  
 # ============================================================
-# ПРОВЕРКА ФЬЮЧЕРСА
+# ВАЛИДАЦИЯ ИНСТРУМЕНТА (АКЦИИ)
 # ============================================================
  
 def matches_future(future, prefix):
- 
-   ticker = get_string(
-       future,
-       "ticker"
-   ).upper()
- 
-   name = get_string(
-       future,
-       "name"
-   ).upper()
- 
-   basic_asset = get_string(
-       future,
-       "basicAsset"
-   ).upper()
- 
-   text = " ".join(
-       [
-           ticker,
-           name,
-           basic_asset
-       ]
-   )
- 
-   prefix = prefix.upper()
- 
-   # -------------------------
-   # ЮАНЬ
-   # -------------------------
- 
-   if prefix == "CR":
- 
-       keywords = [
-           "CR",
-           "CNY",
-           "YUAN",
-           "CNH",
-           "ЮАН",
-           "КИТАЙ"
-       ]
- 
-       return any(
-           word in text
-           for word in keywords
-       )
- 
-   # -------------------------
-   # ЗОЛОТО
-   # -------------------------
- 
-   if prefix == "GD":
- 
-       keywords = [
-           "GD",
-           "GOLD",
-           "ЗОЛОТ"
-       ]
- 
-       return any(
-           word in text
-           for word in keywords
-       )
- 
-   # -------------------------
-   # НЕФТЬ
-   # -------------------------
- 
-   if prefix == "BR":
- 
-       keywords = [
-           "BR",
-           "BRENT",
-           "НЕФТ"
-       ]
- 
-       return any(
-           word in text
-           for word in keywords
-       )
+    """
+    Универсальная проверка для акций. Напрямую сравнивает тикер 
+    инструмента с искомым кодом (например, SBER, GAZP, LKOH).
+    """
+    ticker = get_string(future, "ticker").upper()
+    prefix = prefix.upper()
+    
+    # Картирование старых фьючерсных префиксов на акции (для обратной совместимости)
+    legacy_mapping = {
+        "CR": "SBER",  # Вместо Юаня берем Сбербанк
+        "GD": "GAZP",  # Вместо Золота берем Газпром
+        "BR": "LKOH",  # Вместо Нефти берем Лукойл
+        "NG": "NVTK",  # Вместо Газа берем Новатэк
+        "MX": "YNDX",  # Вместо Индекса берем Яндекс
+        "SV": "ROSN"   # Вместо Серебра берем Роснефть
+    }
+    
+    if prefix in legacy_mapping:
+        prefix = legacy_mapping[prefix]
+        
+    return prefix in ticker
 
-   # -------------------------
-   # ПРИРОДНЫЙ ГАЗ (NG) — Новое!
-   # -------------------------
-   if prefix == "NG":
- 
-       keywords = [
-           "NG",
-           "NATURAL GAS",
-           "ГАЗ"
-       ]
- 
-       return any(
-           word in text
-           for word in keywords
-       )
 
-   # -------------------------
-   # ИНДЕКС МОСБИРЖИ (MX) — Новое!
-   # -------------------------
-   if prefix == "MX":
- 
-       keywords = [
-           "MX",
-           "IMOEX",
-           "ИНДЕКС МОС",
-           "МОСБИРЖ"
-       ]
- 
-       return any(
-           word in text
-           for word in keywords
-       )
-
-   # -------------------------
-   # СЕРЕБРО (SV) — Новое!
-   # -------------------------
-   if prefix == "SV":
- 
-       keywords = [
-           "SV",
-           "SILVER",
-           "СЕРЕБР"
-       ]
- 
-       return any(
-           word in text
-           for word in keywords
-       )
- 
-   return False
- 
- 
 # ============================================================
-# ПОИСК АКТУАЛЬНОГО ФЬЮЧЕРСА
+# ПОИСК АКТИВНОЙ АКЦИИ ПО ТИКЕРУ (НОВЫЙ ДВИЖОК)
 # ============================================================
  
 def find_active_share(ticker_name):
-   try:
-       payload = {
-           "query": ticker_name,
-           "instrumentKind": "INSTRUMENT_TYPE_SHARE",
-           "apiTradeAvailableFlag": True
-       }
-       data = api_post(FIND_INSTRUMENT_URL, payload)
-       instruments = data.get("instruments", [])
-       
-       for item in instruments:
-           if get_string(item, "ticker").upper() == ticker_name.upper():
-               instrument_uid = item.get("instrumentUid") or item.get("uid")
-               return {
-                   "ticker": get_string(item, "ticker"),
-                   "name": get_string(item, "name"),
-                   "uid": instrument_uid,
-                   "instrument_uid": instrument_uid,
-                   "class_code": get_string(item, "classCode"),
-                   "basic_asset": ""
-               }
-   except Exception as e:
-       log.error("Ошибка поиска акции %s: %s", ticker_name, e)
-   return None
+    """
+    Ищет акцию на Мосбирже напрямую по её биржевому тикеру через Т-Банк API.
+    """
+    try:
+        payload = {
+            "query": ticker_name,
+            "instrumentKind": "INSTRUMENT_TYPE_SHARE",
+            "apiTradeAvailableFlag": True
+        }
+        data = api_post(FIND_INSTRUMENT_URL, payload)
+        instruments = data.get("instruments", [])
+        
+        for item in instruments:
+            if get_string(item, "ticker").upper() == ticker_name.upper():
+                instrument_uid = item.get("instrumentUid") or item.get("uid")
+                return {
+                    "ticker": get_string(item, "ticker"),
+                    "name": get_string(item, "name"),
+                    "uid": instrument_uid,
+                    "instrument_uid": instrument_uid,
+                    "class_code": get_string(item, "classCode"),
+                    "basic_asset": ""
+                }
+    except Exception as e:
+        log.error("Ошибка поиска акции %s: %s", ticker_name, e)
+    return None
+
+
+# ============================================================
+# ЗАЩИТНЫЙ МОСТ ДЛЯ СТАРОГО КОДА (Убирает ошибку NameError)
+# ============================================================
+
+def find_active_future(prefix):
+    """
+    Перенаправляет вызовы старой функции find_active_future на новый движок акций.
+    Если где-то в коде остался вызов find_active_future('CR'), он автоматически найдет Сбербанк.
+    """
+    prefix_upper = str(prefix).upper()
+    
+    # Карта переключения старых префиксов на новые тикеры акций
+    legacy_assets = {
+        "CR": "SBER",
+        "GD": "GAZP",
+        "BR": "LKOH",
+        "NG": "NVTK",
+        "MX": "YNDX",
+        "SV": "ROSN"
+    }
+    
+    target_ticker = legacy_assets.get(prefix_upper, prefix_upper)
+    return find_active_share(target_ticker)
+
 
 
 
