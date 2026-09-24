@@ -504,64 +504,185 @@ def normalize_candles(candles):
 
 
 # ============================================================
-# ТВОЯ СТРАТЕГИЯ
+# НАБОР СТРАТЕГИЙ И АВТОПОДБОР
 # ============================================================
 
-def analyze_strategy(candles):
+def no_signal(description="Сигнал не сформирован"):
+    return {"signal":"Нет сигналов", "direction":"—", "description":description}
+
+
+def user_strategy(candles):
     if len(candles) < 8:
-        return {
-            "signal": "Нет сигналов",
-            "direction": "—",
-            "description": "Недостаточно свечей",
-        }
-
-    last = candles[-8:]
-
-    highs = [x["high"] for x in last]
-    lows = [x["low"] for x in last]
-    closes = [x["close"] for x in last]
-
-    # SHORT:
-    # последовательные максимумы растут,
-    # затем три снижающихся закрытия
-    short_pattern = (
-        highs[3] > highs[2]
-        and highs[4] > highs[3]
-        and highs[5] > highs[4]
-        and closes[-1] < closes[-2]
-        and closes[-2] < closes[-3]
-    )
-
-    # LONG:
-    # последовательные минимумы снижаются,
-    # затем три повышающихся закрытия
-    long_pattern = (
-        lows[3] < lows[2]
-        and lows[4] < lows[3]
-        and lows[5] < lows[4]
-        and closes[-1] > closes[-2]
-        and closes[-2] > closes[-3]
-    )
-
+        return no_signal("Недостаточно свечей")
+    last=candles[-8:]
+    highs=[x["high"] for x in last]
+    lows=[x["low"] for x in last]
+    closes=[x["close"] for x in last]
+    short_pattern=(highs[3]>highs[2] and highs[4]>highs[3] and highs[5]>highs[4]
+                   and closes[-1]<closes[-2] and closes[-2]<closes[-3])
+    long_pattern=(lows[3]<lows[2] and lows[4]<lows[3] and lows[5]<lows[4]
+                  and closes[-1]>closes[-2] and closes[-2]>closes[-3])
     if short_pattern:
-        return {
-            "signal": "SHORT",
-            "direction": "Вниз",
-            "description": "Сформирован SHORT-сигнал",
-        }
-
+        return {"signal":"SHORT","direction":"Вниз","description":"Твоя стратегия: растущие максимумы → разворот вниз"}
     if long_pattern:
-        return {
-            "signal": "LONG",
-            "direction": "Вверх",
-            "description": "Сформирован LONG-сигнал",
-        }
+        return {"signal":"LONG","direction":"Вверх","description":"Твоя стратегия: снижающиеся минимумы → разворот вверх"}
+    return no_signal()
 
-    return {
-        "signal": "Нет сигналов",
-        "direction": "—",
-        "description": "Сигнал не сформирован",
-    }
+
+def ema(values, period):
+    if len(values)<period: return None
+    k=2/(period+1)
+    value=sum(values[:period])/period
+    for price in values[period:]: value=price*k+value*(1-k)
+    return value
+
+
+def ema_trend_strategy(candles):
+    if len(candles)<30: return no_signal("Недостаточно свечей для EMA")
+    closes=[x["close"] for x in candles]
+    e9=ema(closes[-30:],9); e21=ema(closes[-30:],21)
+    if e9 is None or e21 is None: return no_signal()
+    if e9>e21 and closes[-1]>e9 and closes[-1]>closes[-2]:
+        return {"signal":"LONG","direction":"Вверх","description":"EMA 9 выше EMA 21 и цена выше EMA 9"}
+    if e9<e21 and closes[-1]<e9 and closes[-1]<closes[-2]:
+        return {"signal":"SHORT","direction":"Вниз","description":"EMA 9 ниже EMA 21 и цена ниже EMA 9"}
+    return no_signal()
+
+
+def breakout_strategy(candles):
+    if len(candles)<21: return no_signal("Недостаточно свечей для Breakout")
+    prev=candles[-21:-1]; last=candles[-1]
+    high=max(x["high"] for x in prev); low=min(x["low"] for x in prev)
+    if last["close"]>high:
+        return {"signal":"LONG","direction":"Вверх","description":"Пробой максимума 20 предыдущих свечей"}
+    if last["close"]<low:
+        return {"signal":"SHORT","direction":"Вниз","description":"Пробой минимума 20 предыдущих свечей"}
+    return no_signal()
+
+
+def rsi_strategy(candles):
+    if len(candles)<16: return no_signal("Недостаточно свечей для RSI")
+    closes=[x["close"] for x in candles[-15:]]
+    gains=[]; losses=[]
+    for a,b in zip(closes[:-1],closes[1:]):
+        d=b-a; gains.append(max(d,0)); losses.append(max(-d,0))
+    avg_gain=sum(gains)/len(gains); avg_loss=sum(losses)/len(losses)
+    if avg_loss==0: rsi=100
+    else: rsi=100-(100/(1+(avg_gain/avg_loss)))
+    if rsi<30 and closes[-1]>closes[-2]:
+        return {"signal":"LONG","direction":"Вверх","description":f"RSI перепродан ({rsi:.1f}) и цена разворачивается вверх"}
+    if rsi>70 and closes[-1]<closes[-2]:
+        return {"signal":"SHORT","direction":"Вниз","description":f"RSI перекуплен ({rsi:.1f}) и цена разворачивается вниз"}
+    return no_signal()
+
+
+def macd_strategy(candles):
+    if len(candles)<35: return no_signal("Недостаточно свечей для MACD")
+    closes=[x["close"] for x in candles]
+    fast=ema(closes[-35:],12); slow=ema(closes[-35:],26)
+    if fast is None or slow is None: return no_signal()
+    prev_fast=ema(closes[-36:-1],12) if len(closes)>=36 else None
+    prev_slow=ema(closes[-36:-1],26) if len(closes)>=36 else None
+    if prev_fast is not None and prev_slow is not None:
+        if prev_fast<=prev_slow and fast>slow:
+            return {"signal":"LONG","direction":"Вверх","description":"MACD пересек нулевую линию вверх"}
+        if prev_fast>=prev_slow and fast<slow:
+            return {"signal":"SHORT","direction":"Вниз","description":"MACD пересек нулевую линию вниз"}
+    return no_signal()
+
+
+def bollinger_strategy(candles):
+    if len(candles)<21: return no_signal("Недостаточно свечей для Bollinger")
+    closes=[x["close"] for x in candles[-20:]]; last=candles[-1]["close"]
+    mean=sum(closes)/20
+    variance=sum((x-mean)**2 for x in closes)/20
+    sd=variance**0.5
+    upper=mean+2*sd; lower=mean-2*sd
+    if last<lower:
+        return {"signal":"LONG","direction":"Вверх","description":"Цена ниже нижней полосы Bollinger"}
+    if last>upper:
+        return {"signal":"SHORT","direction":"Вниз","description":"Цена выше верхней полосы Bollinger"}
+    return no_signal()
+
+
+STRATEGIES=[
+    {"name":"Твоя стратегия","key":"user","fn":user_strategy},
+    {"name":"EMA Trend","key":"ema","fn":ema_trend_strategy},
+    {"name":"Breakout","key":"breakout","fn":breakout_strategy},
+    {"name":"RSI Reversal","key":"rsi","fn":rsi_strategy},
+    {"name":"MACD","key":"macd","fn":macd_strategy},
+    {"name":"Bollinger","key":"bollinger","fn":bollinger_strategy},
+]
+
+
+def calculate_max_drawdown(trades):
+    equity=0.0; peak=0.0; max_dd=0.0
+    for trade in trades:
+        equity += float(trade.get("net_result",0))
+        peak=max(peak,equity)
+        max_dd=min(max_dd,equity-peak)
+    return round(abs(max_dd),2)
+
+
+def build_strategy_history(candles, instrument, title, strategy_fn):
+    if len(candles)<8: return [], None
+    trades=[]; current_position=None
+    for i in range(7,len(candles)):
+        window=candles[:i+1]
+        analysis=strategy_fn(window)
+        signal=analysis["signal"]
+        candle=candles[i]; price=candle["close"]; candle_time=candle["time"]
+        if current_position is None:
+            if signal in ("LONG","SHORT"):
+                current_position={"instrument":instrument,"title":title,"direction":signal,"entry_price":price,"entry_time":candle_time}
+            continue
+        if signal==current_position["direction"] or signal=="Нет сигналов": continue
+        if ((current_position["direction"]=="LONG" and signal=="SHORT") or
+            (current_position["direction"]=="SHORT" and signal=="LONG")):
+            result=calculate_trade_result(current_position["direction"],current_position["entry_price"],price)
+            if result is None: current_position=None; continue
+            trades.append({"id":len(trades)+1,"instrument":instrument,"title":title,
+                           "direction":current_position["direction"],"entry_time":current_position["entry_time"],
+                           "exit_time":candle_time,"entry_price":round(current_position["entry_price"],8),
+                           "exit_price":round(price,8),"exit_signal":signal,**result})
+            current_position={"instrument":instrument,"title":title,"direction":signal,"entry_price":price,"entry_time":candle_time}
+    return trades,current_position
+
+
+def evaluate_all_strategies(candles, instrument, title):
+    rows=[]
+    for strategy in STRATEGIES:
+        trades, open_position=build_strategy_history(candles,instrument,title,strategy["fn"])
+        stats=calculate_statistics(trades)
+        drawdown=calculate_max_drawdown(trades)
+        # Рейтинг не является прогнозом: это технический отбор по историческому тесту.
+        # Требуем минимум 3 закрытые сделки; затем учитываем net, winrate и drawdown.
+        if stats["total"]>=3:
+            score=(stats["net"]/(1+drawdown))*100 + stats["winrate"]*2
+        else:
+            score=-1e9
+        rows.append({"name":strategy["name"],"key":strategy["key"],"statistics":stats,
+                     "drawdown":drawdown,"score":round(score,4),"trades":trades,
+                     "open_position":open_position})
+    rows.sort(key=lambda x:x["score"],reverse=True)
+    best=rows[0]
+    if best["statistics"]["total"]<3:
+        # Если данных мало, выбираем стратегию с наибольшим числом сделок, но явно показываем это.
+        best=max(rows,key=lambda x:(x["statistics"]["total"],x["statistics"]["net"]))
+    return rows,best
+
+
+def strategy_signal_from_best(candles,best):
+    for strategy in STRATEGIES:
+        if strategy["key"]==best["key"]:
+            return strategy["fn"](candles)
+    return no_signal()
+
+
+def analyze_strategy(candles):
+    # Совместимость со старым интерфейсом.
+    _,best=evaluate_all_strategies(candles,"instrument","instrument")
+    return strategy_signal_from_best(candles,best)
 
 
 # ============================================================
@@ -822,6 +943,8 @@ def get_future_status(prefix, title, emoji):
             "direction": "—",
             "description": "",
         },
+        "selected_strategy": "—",
+        "strategy_selection": [],
         "history": [],
         "statistics": {},
         "open_position": None,
@@ -847,19 +970,15 @@ def get_future_status(prefix, title, emoji):
             result["message"] = "Свечей 0"
             return result
 
-        result["strategy"] = analyze_strategy(candles)
+        rankings, best = evaluate_all_strategies(candles, prefix, title)
+        result["strategy"] = strategy_signal_from_best(candles, best)
+        result["selected_strategy"] = best["name"]
+        result["strategy_selection"] = rankings
         result["status"] = "OK"
-        result["message"] = "Данные получены"
-
-        trades, open_position = build_strategy_history(
-            candles,
-            prefix,
-            title,
-        )
-
-        result["history"] = trades
-        result["open_position"] = open_position
-        result["statistics"] = calculate_statistics(trades)
+        result["message"] = "Данные получены. Проверены все стратегии."
+        result["history"] = best["trades"]
+        result["open_position"] = best["open_position"]
+        result["statistics"] = best["statistics"]
 
         return result
 
@@ -889,6 +1008,8 @@ def get_share_status(stock):
             "direction": "—",
             "description": "",
         },
+        "selected_strategy": "—",
+        "strategy_selection": [],
         "history": [],
         "statistics": {},
         "open_position": None,
@@ -914,19 +1035,15 @@ def get_share_status(stock):
             result["message"] = "Свечей 0"
             return result
 
-        result["strategy"] = analyze_strategy(candles)
+        rankings, best = evaluate_all_strategies(candles, stock["code"], stock["title"])
+        result["strategy"] = strategy_signal_from_best(candles, best)
+        result["selected_strategy"] = best["name"]
+        result["strategy_selection"] = rankings
         result["status"] = "OK"
-        result["message"] = "Данные получены"
-
-        trades, open_position = build_strategy_history(
-            candles,
-            stock["code"],
-            stock["title"],
-        )
-
-        result["history"] = trades
-        result["open_position"] = open_position
-        result["statistics"] = calculate_statistics(trades)
+        result["message"] = "Данные получены. Проверены все стратегии."
+        result["history"] = best["trades"]
+        result["open_position"] = best["open_position"]
+        result["statistics"] = best["statistics"]
 
         return result
 
@@ -1136,6 +1253,8 @@ body{
     background:#442020;
     color:#ff8585;
 }
+
+.strategy-box{margin-top:14px;background:#0d1219;border-radius:12px;padding:12px;font-size:12px}.strategy-row{display:grid;grid-template-columns:1.6fr .7fr .6fr 1fr .9fr;gap:6px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06);color:#b8c0cc}.strategy-row:last-child{border-bottom:0}@media(max-width:600px){.strategy-row{grid-template-columns:1fr 1fr}.strategy-row span:nth-child(n+3){font-size:11px}}
 
 .info{
     margin-top:15px;
@@ -1347,8 +1466,8 @@ function renderInstrumentCard(item){
             </div>
 
             <div class="info">
-                Закрытых сделок:
-                <b>${stats.total || 0}</b><br>
+                <b>🤖 Выбрана стратегия: ${item.selected_strategy || "—"}</b><br>
+                Закрытых сделок: <b>${stats.total || 0}</b><br>
 
                 Проходимость:
                 <b>${stats.winrate || 0}%</b><br>
@@ -1362,8 +1481,19 @@ function renderInstrumentCard(item){
                 Чистый результат:
                 <b>${money(stats.net)} ₽</b><br>
 
-                Открытая позиция:
-                <b>${openPosition}</b>
+                Открытая позиция: <b>${openPosition}</b>
+            </div>
+
+            <div class="strategy-box">
+                <b>🔬 Проверка всех стратегий</b>
+                ${(item.strategy_selection || []).map((r,i)=>`
+                    <div class="strategy-row">
+                        <span>${i+1}. ${r.name}</span>
+                        <span>${r.statistics.total} сделок</span>
+                        <span>${r.statistics.winrate}%</span>
+                        <span class="${r.statistics.net>=0?"positive":"negative"}">${money(r.statistics.net)} ₽</span>
+                        <span>DD ${money(r.drawdown)} ₽</span>
+                    </div>`).join("")}
             </div>
         </div>
     `;
