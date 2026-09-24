@@ -782,7 +782,7 @@ def calculate_trade_result(direction, entry_price, exit_price):
 # ИСТОРИЯ СТРАТЕГИИ
 # ============================================================
 
-def build_strategy_history(candles, instrument, title):
+def build_strategy_history(candles, instrument, title, strategy_fn):
     if len(candles) < 8:
         return [], None
 
@@ -790,8 +790,11 @@ def build_strategy_history(candles, instrument, title):
     current_position = None
 
     for i in range(7, len(candles)):
+        # Используем срез из вашей новой логики скользящего окна
         window = candles[i - 7:i + 1]
-        analysis = analyze_strategy(window)
+        
+        # ВЫЗЫВАЕМ ПЕРЕДАННУЮ СТРАТЕГИЮ ИЗ ЦИКЛА вместо фиксированной функции
+        analysis = strategy_fn(window)
         signal = analysis["signal"]
 
         candle = candles[i]
@@ -838,9 +841,7 @@ def build_strategy_history(candles, instrument, title):
                 "direction": current_position["direction"],
                 "entry_time": current_position["entry_time"],
                 "exit_time": candle_time,
-                "entry_price": round(
-                    current_position["entry_price"], 8
-                ),
+                "entry_price": round(current_position["entry_price"], 8),
                 "exit_price": round(price, 8),
                 "exit_signal": signal,
                 **result,
