@@ -625,28 +625,80 @@ def calculate_max_drawdown(trades):
 
 
 def build_strategy_history(candles, instrument, title, strategy_fn):
-    if len(candles)<8: return [], None
-    trades=[]; current_position=None
-    for i in range(7,len(candles)):
-        window=candles[:i+1]
-        analysis=strategy_fn(window)
-        signal=analysis["signal"]
-        candle=candles[i]; price=candle["close"]; candle_time=candle["time"]
+    # Оставляем базовую проверку на минимальный размер истории
+    if len(candles) < 8: 
+        return [], None
+        
+    trades = []
+    current_position = None
+    
+    # Начинаем цикл с 7, чтобы у вашей стратегии сразу было 8 свечей (индексы 0..7)
+    for i in range(7, len(candles)):
+        # ИСПРАВЛЕНО: Передаем ВСЮ историю от начала до текущей свечи i включительно.
+        # Это позволит EMA, RSI и MACD накопить историю (30-35 свечей) и начать выдавать сигналы.
+        # При этом "Твоя стратегия" внутри себя возьмет последние 8 свечей и тоже отработает корректно.
+        window = candles[:i + 1]
+        
+        analysis = strategy_fn(window)
+        signal = analysis["signal"]
+        
+        candle = candles[i]
+        price = candle["close"]
+        candle_time = candle["time"]
+        
         if current_position is None:
-            if signal in ("LONG","SHORT"):
-                current_position={"instrument":instrument,"title":title,"direction":signal,"entry_price":price,"entry_time":candle_time}
+            if signal in ("LONG", "SHORT"):
+                current_position = {
+                    "instrument": instrument,
+                    "title": title,
+                    "direction": signal,
+                    "entry_price": price,
+                    "entry_time": candle_time,
+                }
             continue
-        if signal==current_position["direction"] or signal=="Нет сигналов": continue
-        if ((current_position["direction"]=="LONG" and signal=="SHORT") or
-            (current_position["direction"]=="SHORT" and signal=="LONG")):
-            result=calculate_trade_result(current_position["direction"],current_position["entry_price"],price)
-            if result is None: current_position=None; continue
-            trades.append({"id":len(trades)+1,"instrument":instrument,"title":title,
-                           "direction":current_position["direction"],"entry_time":current_position["entry_time"],
-                           "exit_time":candle_time,"entry_price":round(current_position["entry_price"],8),
-                           "exit_price":round(price,8),"exit_signal":signal,**result})
-            current_position={"instrument":instrument,"title":title,"direction":signal,"entry_price":price,"entry_time":candle_time}
-    return trades,current_position
+            
+        if signal == current_position["direction"] or signal == "Нет сигналов": 
+            continue
+            
+        opposite_signal = (
+            current_position["direction"] == "LONG" and signal == "SHORT"
+        ) or (
+            current_position["direction"] == "SHORT" and signal == "LONG"
+        )
+        
+        if opposite_signal:
+            result = calculate_trade_result(
+                current_position["direction"],
+                current_position["entry_price"],
+                price,
+            )
+            if result is None: 
+                current_position = None
+                continue
+                
+            trade = {
+                "id": len(trades) + 1,
+                "instrument": instrument,
+                "title": title,
+                "direction": current_position["direction"],
+                "entry_time": current_position["entry_time"],
+                "exit_time": candle_time,
+                "entry_price": round(current_position["entry_price"], 8),
+                "exit_price": round(price, 8),
+                "exit_signal": signal,
+                **result,
+            }
+            trades.append(trade)
+            
+            current_position = {
+                "instrument": instrument,
+                "title": title,
+                "direction": signal,
+                "entry_price": price,
+                "entry_time": candle_time,
+            }
+            
+    return trades, current_position
 
 
 def evaluate_all_strategies(candles, instrument, title):
