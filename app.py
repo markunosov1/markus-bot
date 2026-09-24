@@ -5,7 +5,6 @@ import logging
 import threading
 import warnings
 from datetime import datetime, timedelta, timezone
-
 import requests
 import urllib3
 from flask import Flask, jsonify, render_template_string
@@ -13,258 +12,122 @@ from flask import Flask, jsonify, render_template_string
 # ============================================================
 # MARKUS TRADE
 # ============================================================
-
 APP_NAME = "Markus Trade"
-
-API_BASE = "https://invest-public-api.tbank.ru/rest"
-
-FIND_INSTRUMENT_URL = (
-    API_BASE +
-    "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
-)
-
-FUTURES_URL = (
-    API_BASE +
-    "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
-)
-
-SHARES_URL = (
-    API_BASE +
-    "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Shares"
-)
-
-CANDLES_URL = (
-    API_BASE +
-    "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles"
-)
+API_BASE = "https://tbank.ru"
+FIND_INSTRUMENT_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
+FUTURES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
+SHARES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Shares"
+CANDLES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles"
 
 # ============================================================
 # НАСТРОЙКИ
 # ============================================================
-
 REQUEST_TIMEOUT = 30
-
-# 4-часовые свечи
 CANDLE_INTERVAL = "CANDLE_INTERVAL_4_HOUR"
-
-# 60 дней истории = достаточно для 4H анализа
 HISTORY_HOURS = 24 * 60
-
-# Обновление каждые 5 минут
 UPDATE_SECONDS = 300
 
 # ============================================================
 # ТОРГОВЫЕ НАСТРОЙКИ
 # ============================================================
-
 POSITION_SIZE_RUBLES = 100000.0
-
 BUY_COMMISSION_PERCENT = 0.10
 SELL_COMMISSION_PERCENT = 0.10
 TAX_PERCENT = 13.0
-
 HISTORY_FILE = "trade_history.json"
-
-# ============================================================
-# SSL
-# ============================================================
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore")
 
-# ============================================================
-# LOGGING
-# ============================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("MARKUS_TRADE")
-
-# ============================================================
-# FLASK
-# ============================================================
 
 app = Flask(__name__)
 
-# ============================================================
-# TOKEN
-# ============================================================
-
 def get_token():
-    possible_names = [
-        "TINKOFF_TOKEN",
-        "TINVEST_TOKEN",
-        "T_BANK_TOKEN",
-        "API_TOKEN",
-        "TOKEN",
-    ]
-
+    possible_names = ["TINKOFF_TOKEN", "TINVEST_TOKEN", "T_BANK_TOKEN", "API_TOKEN", "TOKEN"]
     for name in possible_names:
         value = os.environ.get(name)
         if value:
             value = value.strip()
-            if value:
-                return value
-
+            if value: return value
     return None
-
-
-# ============================================================
-# API POST
-# ============================================================
 
 def api_post(url, payload):
     token = get_token()
-
     if not token:
-        raise RuntimeError(
-            "API-токен не найден. Проверь переменную TINKOFF_TOKEN."
-        )
-
+        raise RuntimeError("API-токен не найден. Проверь переменную TINKOFF_TOKEN.")
     headers = {
         "Authorization": "Bearer " + token,
         "Content-Type": "application/json",
     }
-
-    response = requests.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=REQUEST_TIMEOUT,
-        verify=False,
-    )
-
+    response = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT, verify=False)
     if response.status_code != 200:
-        raise RuntimeError(
-            f"HTTP {response.status_code}: {response.text[:1000]}"
-        )
-
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
     try:
         return response.json()
     except Exception:
-        raise RuntimeError(
-            "T-Bank вернул ответ, который не удалось прочитать как JSON."
-        )
-
-
-# ============================================================
-# ВСПОМОГАТЕЛЬНЫЕ
-# ============================================================
+        raise RuntimeError("T-Bank вернул ответ, который не удалось прочитать как JSON.")
 
 def get_string(obj, key):
     value = obj.get(key)
-    if value is None:
-        return ""
-    return str(value)
-
+    return "" if value is None else str(value)
 
 def parse_date(value):
-    if not value:
-        return None
-
+    if not value: return None
     try:
         text = str(value)
-
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-
+        if text.endswith("Z"): text = text[:-1] + "+00:00"
         dt = datetime.fromisoformat(text)
-
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
         return dt
-
     except Exception:
         return None
 
-
 def quotation_to_float(value):
-    if value is None:
-        return 0.0
-
-    if isinstance(value, (int, float)):
-        return float(value)
-
+    if value is None: return 0.0
+    if isinstance(value, (int, float)): return float(value)
     if isinstance(value, dict):
         units = value.get("units", 0)
         nano = value.get("nano", 0)
-
-        try:
-            return float(units) + float(nano) / 1_000_000_000
-        except Exception:
-            return 0.0
-
-    try:
-        return float(str(value))
-    except Exception:
-        return 0.0
-
+        try: return float(units) + float(nano) / 1_000_000_000
+        except Exception: return 0.0
+    try: return float(str(value))
+    except Exception: return 0.0
 
 # ============================================================
 # ФЬЮЧЕРСЫ
 # ============================================================
-
 def get_all_futures():
-    payload = {
-        "instrumentStatus": "INSTRUMENT_STATUS_BASE"
-    }
-
-    try:
-        data = api_post(FUTURES_URL, payload)
+    payload = {"instrumentStatus": "INSTRUMENT_STATUS_BASE"}
+    try: data = api_post(FUTURES_URL, payload)
     except Exception:
-        payload = {
-            "instrumentStatus": "INSTRUMENT_STATUS_ALL"
-        }
+        payload = {"instrumentStatus": "INSTRUMENT_STATUS_ALL"}
         data = api_post(FUTURES_URL, payload)
-
     futures = data.get("futures", [])
-
-    if not isinstance(futures, list):
-        return []
-
-    return futures
-
+    return futures if isinstance(futures, list) else []
 
 def matches_future(future, prefix):
     ticker = get_string(future, "ticker").upper()
     name = get_string(future, "name").upper()
     basic_asset = get_string(future, "basicAsset").upper()
-
     text = " ".join([ticker, name, basic_asset])
     prefix = prefix.upper()
-
     if prefix == "CR":
-        keywords = ["CR", "CNY", "YUAN", "CNH", "ЮАН", "КИТАЙ"]
-        return any(word in text for word in keywords)
-
+        return any(word in text for word in ["CR", "CNY", "YUAN", "CNH", "ЮАН", "КИТАЙ"])
     if prefix == "GD":
-        keywords = ["GD", "GOLD", "ЗОЛОТ"]
-        return any(word in text for word in keywords)
-
+        return any(word in text for word in ["GD", "GOLD", "ЗОЛОТ"])
     if prefix == "BR":
-        keywords = ["BR", "BRENT", "НЕФТ"]
-        return any(word in text for word in keywords)
-
+        return any(word in text for word in ["BR", "BRENT", "НЕФТ"])
     return False
-
 
 def find_active_future(prefix):
     queries = [prefix]
-
-    if prefix == "CR":
-        queries = ["CR", "CNY", "юань", "CNY/RUB"]
-    elif prefix == "GD":
-        queries = ["GD", "GOLD", "золото"]
-    elif prefix == "BR":
-        queries = ["BR", "BRENT", "нефть"]
-
+    if prefix == "CR": queries = ["CR", "CNY", "юань", "CNY/RUB"]
+    elif prefix == "GD": queries = ["GD", "GOLD", "золото"]
+    elif prefix == "BR": queries = ["BR", "BRENT", "нефть"]
     candidates = []
     now = datetime.now(timezone.utc)
-
     for query in queries:
         try:
             payload = {
@@ -272,41 +135,20 @@ def find_active_future(prefix):
                 "instrumentKind": "INSTRUMENT_TYPE_FUTURES",
                 "apiTradeAvailableFlag": True,
             }
-
             data = api_post(FIND_INSTRUMENT_URL, payload)
-
         except Exception as e:
             log.warning("FindInstrument %s: %s", query, e)
             continue
-
         instruments = data.get("instruments", [])
-
-        if not isinstance(instruments, list):
-            continue
-
+        if not isinstance(instruments, list): continue
         for item in instruments:
-            if not isinstance(item, dict):
-                continue
-
-            if not matches_future(item, prefix):
-                continue
-
-            instrument_uid = (
-                item.get("instrumentUid") or item.get("uid")
-            )
-
-            if not instrument_uid:
-                continue
-
+            if not isinstance(item, dict) or not matches_future(item, prefix): continue
+            instrument_uid = item.get("instrumentUid") or item.get("uid")
+            if not instrument_uid: continue
             first_trade = parse_date(item.get("firstTradeDate"))
             last_trade = parse_date(item.get("lastTradeDate"))
-
-            if first_trade and now < first_trade:
-                continue
-
-            if last_trade and now > last_trade:
-                continue
-
+            if first_trade and now < first_trade: continue
+            if last_trade and now > last_trade: continue
             candidates.append({
                 "ticker": get_string(item, "ticker"),
                 "name": get_string(item, "name"),
@@ -317,57 +159,24 @@ def find_active_future(prefix):
                 "class_code": get_string(item, "classCode"),
                 "basic_asset": get_string(item, "basicAsset"),
             })
-
-    unique = {}
-    for item in candidates:
-        unique[item["instrument_uid"]] = item
-
+    unique = {item["instrument_uid"]: item for item in candidates}
     candidates = list(unique.values())
-
-    if not candidates:
-        return None
-
-    def expiry_key(item):
-        dt = item.get("last_trade")
-        if dt:
-            return dt
-        return datetime.max.replace(tzinfo=timezone.utc)
-
-    candidates.sort(key=expiry_key)
-
-    return candidates[0]
-
+    if not candidates: return None
+    candidates.sort(key=lambda x: x.get("last_trade") or datetime.max.replace(tzinfo=timezone.utc))
+    return candidates
 
 # ============================================================
 # АКЦИИ
 # ============================================================
-
 STOCKS = [
-    {
-        "code": "SBER",
-        "title": "Сбербанк",
-        "emoji": "🏦",
-        "queries": ["SBER", "Сбербанк"],
-    },
-    {
-        "code": "ROSN",
-        "title": "Роснефть",
-        "emoji": "🛢️",
-        "queries": ["ROSN", "Роснефть"],
-    },
-    {
-        "code": "GMKN",
-        "title": "Норникель",
-        "emoji": "⛏️",
-        "queries": ["GMKN", "NORNICKEL", "Норникель"],
-    },
+    {"code": "SBER", "title": "Сбербанк", "emoji": "🏦", "queries": ["SBER", "Сбербанк"]},
+    {"code": "ROSN", "title": "Роснефть", "emoji": "🛢️", "queries": ["ROSN", "Роснефть"]},
+    {"code": "GMKN", "title": "Норникель", "emoji": "⛏️", "queries": ["GMKN", "NORNICKEL", "Норникель"]},
 ]
-
 
 def find_share(stock):
     candidates = []
     now = datetime.now(timezone.utc)
-
     for query in stock["queries"]:
         try:
             payload = {
@@ -375,47 +184,26 @@ def find_share(stock):
                 "instrumentKind": "INSTRUMENT_TYPE_SHARE",
                 "apiTradeAvailableFlag": True,
             }
-
             data = api_post(FIND_INSTRUMENT_URL, payload)
-
         except Exception as e:
             log.warning("FindInstrument акции %s: %s", query, e)
             continue
-
         instruments = data.get("instruments", [])
-
-        if not isinstance(instruments, list):
-            continue
-
+        if not isinstance(instruments, list): continue
         for item in instruments:
-            if not isinstance(item, dict):
-                continue
-
+            if not isinstance(item, dict): continue
             ticker = get_string(item, "ticker").upper()
             name = get_string(item, "name").upper()
             figi = get_string(item, "figi").upper()
-
             wanted = stock["code"].upper()
-
-            # Строго отбрасываем явные несовпадения.
             if wanted not in ticker and wanted not in figi:
-                if stock["title"].upper() not in name:
-                    continue
-
+                if stock["title"].upper() not in name: continue
             uid = item.get("instrumentUid") or item.get("uid")
-
-            if not uid:
-                continue
-
+            if not uid: continue
             first_trade = parse_date(item.get("firstTradeDate"))
             last_trade = parse_date(item.get("lastTradeDate"))
-
-            if first_trade and now < first_trade:
-                continue
-
-            if last_trade and now > last_trade:
-                continue
-
+            if first_trade and now < first_trade: continue
+            if last_trade and now > last_trade: continue
             candidates.append({
                 "ticker": get_string(item, "ticker"),
                 "name": get_string(item, "name"),
@@ -424,36 +212,15 @@ def find_share(stock):
                 "figi": get_string(item, "figi"),
                 "class_code": get_string(item, "classCode"),
             })
-
-    unique = {}
-    for item in candidates:
-        unique[item["instrument_uid"]] = item
-
+    unique = {item["instrument_uid"]: item for item in candidates}
     candidates = list(unique.values())
-
-    if not candidates:
-        return None
-
-    # Сначала стараемся выбрать точное совпадение тикера.
-    exact = [
-        x for x in candidates
-        if x["ticker"].upper() == stock["code"].upper()
-    ]
-
-    if exact:
-        return exact[0]
-
-    return candidates[0]
-
-
-# ============================================================
-# СВЕЧИ
-# ============================================================
+    if not candidates: return None
+    exact = [x for x in candidates if x["ticker"].upper() == stock["code"].upper()]
+    return exact if exact else candidates
 
 def get_candles(instrument_uid):
     now = datetime.now(timezone.utc)
     start = now - timedelta(hours=HISTORY_HOURS)
-
     payload = {
         "from": start.isoformat(),
         "to": now.isoformat(),
@@ -461,29 +228,16 @@ def get_candles(instrument_uid):
         "instrumentId": instrument_uid,
         "candleSourceType": "CANDLE_SOURCE_EXCHANGE",
     }
-
     data = api_post(CANDLES_URL, payload)
-
     candles = data.get("candles", [])
-
-    if not isinstance(candles, list):
-        return []
-
-    return candles
-
+    return candles if isinstance(candles, list) else []
 
 def normalize_candles(candles):
     result = []
-
     for candle in candles:
-        if not isinstance(candle, dict):
-            continue
-
+        if not isinstance(candle, dict): continue
         dt = parse_date(candle.get("time"))
-
-        if not dt:
-            continue
-
+        if not dt: continue
         item = {
             "time": dt.isoformat(),
             "open": quotation_to_float(candle.get("open")),
@@ -492,15 +246,11 @@ def normalize_candles(candles):
             "close": quotation_to_float(candle.get("close")),
             "volume": quotation_to_float(candle.get("volume")),
         }
-
-        if item["close"] <= 0:
-            continue
-
+        if item["close"] <= 0: continue
         result.append(item)
-
     result.sort(key=lambda x: x["time"])
-
     return result
+
 
 
 # ============================================================
