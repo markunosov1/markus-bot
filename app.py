@@ -1,4 +1,8 @@
+# -*- coding: utf-8 -*-
+
 import os
+import sys
+import io
 import json
 import time
 import logging
@@ -8,8 +12,22 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 import urllib3
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template_string
 
+# ============================================================
+# ПРИНУДИТЕЛЬНАЯ UTF-8 КОДИРОВКА ДЛЯ STDOUT/STDERR
+# ============================================================
+try:
+    if sys.stdout.encoding is None or sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    if sys.stderr.encoding is None or sys.stderr.encoding.lower() != "utf-8":
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+# ============================================================
+# КОНСТАНТЫ
+# ============================================================
 APP_NAME = "Markus Trade"
 API_BASE = "https://invest-public-api.tbank.ru/rest"
 FIND_INSTRUMENT_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
@@ -26,18 +44,38 @@ POSITION_SIZE_RUBLES = 100000.0
 BUY_COMMISSION_PERCENT = 0.10
 SELL_COMMISSION_PERCENT = 0.10
 TAX_PERCENT = 13.0
+
 HISTORY_FILE = "trade_history.json"
 MIN_BACKTEST_TRADES = 3
 
+# ============================================================
+# WARNINGS И ЛОГИРОВАНИЕ
+# ============================================================
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 log = logging.getLogger("MARKUS_TRADE")
 
+# ============================================================
+# FLASK
+# ============================================================
 app = Flask(__name__)
+try:
+    app.json.ensure_ascii = False
+except Exception:
+    try:
+        app.config["JSON_AS_ASCII"] = False
+    except Exception:
+        pass
 
-
+# ============================================================
+# РАБОТА С API
+# ============================================================
 def get_token():
     for name in ("TINKOFF_TOKEN", "TINVEST_TOKEN", "T_BANK_TOKEN", "API_TOKEN", "TOKEN"):
         value = os.environ.get(name)
@@ -50,7 +88,6 @@ def api_post(url, payload):
     token = get_token()
     if not token:
         raise RuntimeError("API-токен не найден. Проверь переменную TINKOFF_TOKEN.")
-
     response = requests.post(
         url,
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
@@ -58,10 +95,8 @@ def api_post(url, payload):
         timeout=REQUEST_TIMEOUT,
         verify=False,
     )
-
     if response.status_code != 200:
         raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
-
     try:
         return response.json()
     except Exception as exc:
@@ -103,7 +138,9 @@ def quotation_to_float(value):
     except Exception:
         return 0.0
 
-
+# ============================================================
+# ФЬЮЧЕРСЫ
+# ============================================================
 def get_all_futures():
     for status in ("INSTRUMENT_STATUS_BASE", "INSTRUMENT_STATUS_ALL"):
         try:
@@ -123,7 +160,7 @@ def matches_future(future, prefix):
         get_string(future, "basicAsset").upper(),
     ])
     keywords = {
-        "CR": ["CR", "CNY", "YUAN", "CNH", "ЮАНЬ", "КИТАЙ"],
+        "CR": ["CR", "CNY", "YUAN", "CNH", "ЮАН", "КИТАЙ"],
         "GD": ["GD", "GOLD", "ЗОЛОТ"],
         "BR": ["BR", "BRENT", "НЕФТ"],
     }.get(prefix.upper(), [prefix.upper()])
@@ -174,11 +211,9 @@ def find_active_future(prefix):
             except Exception as exc:
                 log.warning("FindInstrument %s: %s", query, exc)
                 continue
-
             instruments = data.get("instruments", [])
             if not isinstance(instruments, list):
                 continue
-
             for item in instruments:
                 if not isinstance(item, dict) or not matches_future(item, prefix):
                     continue
@@ -204,14 +239,14 @@ def find_active_future(prefix):
 
     unique = {x["instrument_uid"]: x for x in candidates}
     candidates = list(unique.values())
-
     if not candidates:
         return None
-
     candidates.sort(key=lambda x: x.get("last_trade") or datetime.max.replace(tzinfo=timezone.utc))
     return candidates[0]
 
-
+# ============================================================
+# АКЦИИ
+# ============================================================
 STOCKS = [
     {"code": "SBER", "title": "Сбербанк", "emoji": "🏦", "queries": ["SBER", "Сбербанк"]},
     {"code": "ROSN", "title": "Роснефть", "emoji": "🛢️", "queries": ["ROSN", "Роснефть"]},
@@ -265,14 +300,14 @@ def find_share(stock):
 
     unique = {x["instrument_uid"]: x for x in candidates}
     candidates = list(unique.values())
-
     if not candidates:
         return None
-
     exact = [x for x in candidates if x["ticker"].upper() == stock["code"]]
     return exact[0] if exact else candidates[0]
 
-
+# ============================================================
+# СВЕЧИ
+# ============================================================
 def get_candles(instrument_uid):
     now = datetime.now(timezone.utc)
     start = now - timedelta(hours=HISTORY_HOURS)
@@ -308,7 +343,9 @@ def normalize_candles(candles):
     result.sort(key=lambda x: x["time"])
     return result
 
-
+# ============================================================
+# ИНДИКАТОРЫ
+# ============================================================
 def ema(values, period):
     if len(values) < period:
         return None
@@ -324,7 +361,9 @@ def sma(values, period):
         return None
     return sum(values[-period:]) / period
 
-
+# ============================================================
+# СТРАТЕГИИ
+# ============================================================
 def no_signal(description="Сигнал не сформирован"):
     return {"signal": "Нет сигналов", "direction": "—", "description": description}
 
@@ -340,6 +379,7 @@ def bollinger_strategy(candles):
     lower = mid - 2 * std
     last = closes[-1]
     prev = closes[-2]
+
     if prev <= lower and last > prev:
         return {"signal": "LONG", "direction": "Вверх",
                 "description": f"Цена отскочила от нижней полосы Bollinger ({lower:.2f})"}
@@ -419,6 +459,7 @@ def rsi_strategy(candles):
     avg_gain = sum(gains) / len(gains)
     avg_loss = sum(losses) / len(losses)
     rsi = 100.0 if avg_loss == 0 else 100 - (100 / (1 + avg_gain / avg_loss))
+
     if rsi < 30 and closes[-1] > closes[-2]:
         return {"signal": "LONG", "direction": "Вверх",
                 "description": f"RSI перепродан ({rsi:.1f}) и цена разворачивается вверх"}
@@ -454,7 +495,9 @@ STRATEGIES = [
     {"name": "Bollinger", "key": "bollinger", "fn": bollinger_strategy, "min_bars": 20},
 ]
 
-
+# ============================================================
+# РАСЧЁТ РЕЗУЛЬТАТОВ
+# ============================================================
 def calculate_commission(amount, percent):
     return amount * percent / 100.0
 
@@ -490,14 +533,12 @@ def calculate_statistics(trades):
     if total == 0:
         return {"total": 0, "profitable": 0, "losing": 0, "winrate": 0,
                 "gross": 0, "commission": 0, "tax": 0, "net": 0}
-
     profitable = sum(1 for t in trades if t.get("net_result", 0) > 0)
     losing = sum(1 for t in trades if t.get("net_result", 0) < 0)
     gross = sum(t.get("gross_result", 0) for t in trades)
     commission = sum(t.get("buy_commission", 0) + t.get("sell_commission", 0) for t in trades)
     tax = sum(t.get("tax", 0) for t in trades)
     net = sum(t.get("net_result", 0) for t in trades)
-
     return {
         "total": total,
         "profitable": profitable,
@@ -520,8 +561,11 @@ def calculate_max_drawdown(trades):
         max_dd = min(max_dd, equity - peak)
     return round(abs(max_dd), 2)
 
-
+# ============================================================
+# БЭКТЕСТ
+# ============================================================
 def build_strategy_history(candles, instrument, title, strategy_fn):
+    """Бэктест стратегии на ВСЕЙ доступной истории."""
     min_bars = 8
     for s in STRATEGIES:
         if s["fn"] is strategy_fn:
@@ -557,7 +601,9 @@ def build_strategy_history(candles, instrument, title, strategy_fn):
             continue
 
         if signal in ("LONG", "SHORT") and signal != current_position["direction"]:
-            result = calculate_trade_result(current_position["direction"], current_position["entry_price"], price)
+            result = calculate_trade_result(
+                current_position["direction"], current_position["entry_price"], price
+            )
             if result is not None:
                 trades.append({
                     "id": len(trades) + 1,
@@ -614,6 +660,7 @@ def evaluate_all_strategies(candles, instrument, title):
         })
 
     eligible_rows = [r for r in rows if r["eligible"]]
+
     if eligible_rows:
         best = max(eligible_rows, key=lambda x: x["score"])
         selection_reason = (
@@ -647,7 +694,9 @@ def analyze_strategy(candles):
     _, best, _ = evaluate_all_strategies(candles, "instrument", "instrument")
     return strategy_signal_from_best(candles, best)
 
-
+# ============================================================
+# ИСТОРИЯ СДЕЛОК
+# ============================================================
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return []
@@ -667,17 +716,17 @@ def save_history(history):
     except Exception as exc:
         log.error("Ошибка сохранения истории: %s", exc)
 
-
+# ============================================================
+# АНАЛИЗ ИНСТРУМЕНТА
+# ============================================================
 def base_result(kind, code, title, emoji):
     return {
         "type": kind, "prefix": code, "title": title, "emoji": emoji,
         "status": "Ошибка", "message": "", "ticker": "—",
         "uid": "—", "candles": 0,
         "strategy": {"signal": "Нет сигналов", "direction": "—", "description": ""},
-        "selected_strategy": "—", "selection_reason": "—",
-        "strategy_selection": [],
-        "history": [], "statistics": calculate_statistics([]),
-        "open_position": None,
+        "selected_strategy": "—", "selection_reason": "—", "strategy_selection": [],
+        "history": [], "statistics": calculate_statistics([]), "open_position": None,
     }
 
 
@@ -732,7 +781,9 @@ def get_share_status(stock):
         result["message"] = str(exc)
         return result
 
-
+# ============================================================
+# СБОР ДАННЫХ
+# ============================================================
 def collect_data():
     futures = [
         get_future_status("CR", "Юань", "¥"),
@@ -765,11 +816,11 @@ def collect_data():
         for t in existing_history
     }
     for trade in all_trades:
-        key = (trade.get("instrument"), trade.get("entry_time"), trade.get("exit_time"), trade.get("direction"))
+        key = (trade.get("instrument"), trade.get("entry_time"),
+               trade.get("exit_time"), trade.get("direction"))
         if key not in existing_keys:
             existing_history.append(trade)
             existing_keys.add(key)
-
     save_history(existing_history[-5000:])
 
     return {
@@ -779,41 +830,3 @@ def collect_data():
         "last_signal": last_signal,
         "statistics": total_statistics,
         "settings": {
-            "position_size": POSITION_SIZE_RUBLES,
-            "buy_commission": BUY_COMMISSION_PERCENT,
-            "sell_commission": SELL_COMMISSION_PERCENT,
-            "tax": TAX_PERCENT,
-            "candle_interval": "4 часа",
-            "history_days": HISTORY_HOURS // 24,
-            "exit_rule": "Противоположный сигнал",
-            "strategies_count": len(STRATEGIES),
-        },
-    }
-
-
-@app.route("/api/status")
-def api_status():
-    try:
-        return jsonify(collect_data())
-    except Exception as exc:
-        log.exception("Ошибка /api/status")
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/history")
-def api_history():
-    history = load_history()
-    return jsonify({"count": len(history), "history": history})
-
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-def background_monitor():
-    while True:
-        try:
-            data = collect_data()
-            log.info("MARKUS TRADE | обновление данных")
-            for item in data["futures"] + data["shares
