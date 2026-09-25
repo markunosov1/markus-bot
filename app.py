@@ -106,13 +106,12 @@ logging.basicConfig(
 log = logging.getLogger("MARKUS_TRADE")
 
 app = Flask(__name__)
+app.config["JSON_AS_ASCII"] = False
+app.config["JSONIFY_PRETTYPRINT_REGULAR"] = False
 try:
     app.json.ensure_ascii = False
 except Exception:
-    try:
-        app.config["JSON_AS_ASCII"] = False
-    except Exception:
-        pass
+    pass
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -1267,10 +1266,12 @@ def api_screening():
                 _SCREENING_CACHE["updated_at"] = None
         data = get_screening_cached()
         updated = _SCREENING_CACHE["updated_at"]
-        return jsonify({
-            "updated_at": updated.isoformat() if updated else None,
-            **data,
-        })
+        response = jsonify({
+    "updated_at": updated.isoformat() if updated else None,
+    **data,
+})
+response.headers["Content-Type"] = "application/json; charset=utf-8"
+return response
     except Exception as exc:
         log.exception("Ошибка /api/screening")
         return jsonify({"error": str(exc)}), 500
@@ -1399,65 +1400,79 @@ th{color:#9ca5b4;font-weight:normal}
 .settings{margin-top:20px;color:#858fa0;font-size:13px;line-height:1.7}
 button{margin-top:10px;margin-right:6px;border:none;border-radius:12px;padding:10px 16px;background:#d7aa52;color:#111;font-weight:bold;cursor:pointer}
 input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color:#fff;border:1px solid rgba(255,255,255,.15)}
-details summary{cursor:pointer;color:#d7aa52;font-weight:bold;margin-top:20px;padding:8px 0}
+details summary{cursor:pointer;color:#d7aa52;font-weight:bold;margin-top:20px;padding:8px 0;list-style:none}
+details summary::-webkit-details-marker{display:none}
+details summary::before{content:"â¶ ";font-size:11px}
+details[open] summary::before{content:"â¼ "}
+.screening-card{background:#0d1219;border-radius:12px;padding:14px;margin-bottom:10px;border-left:3px solid #52e58a}
+.screening-card-rej{background:#0d1219;border-radius:10px;padding:11px;margin-bottom:8px;border-left:3px solid #442020}
+.screening-card .sc-title{font-size:15px;font-weight:bold;color:#fff;margin-bottom:8px}
+.screening-card .sc-sub{font-size:13px;color:#aab3c2;margin-bottom:6px}
+.screening-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:13px;margin-top:10px}
+.screening-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;margin-top:6px}
+.screening-label{color:#8f99aa}
+.screening-card-rej .sc-title{font-size:13px;font-weight:bold;color:#fff}
+.screening-card-rej .sc-sub{font-size:12px;color:#8f99aa;margin-top:3px}
+.screening-card-rej .sc-meta{font-size:12px;color:#aab3c2;margin-top:6px}
+.screening-card-rej .sc-reason{font-size:12px;color:#ff8585;margin-top:6px}
 @media(max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
 @media(max-width:700px){.grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.header{align-items:flex-start;gap:10px;flex-direction:column}}
 </style></head><body><div class="container">
-<div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">Загрузка...</div></div>
+<div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">ÐÐ°Ð³ÑÑÐ·ÐºÐ°...</div></div>
 
 <div class="card" id="screeningCard">
-<h2>🔍 Автоматический скрининг стратегий</h2>
-<div class="info" id="screeningInfo">Анализ запущен. Первый расчёт может занять 1-3 минуты...</div>
-<div class="table-wrap" id="screeningPassed"></div>
+<h2>ð ÐÐ²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐµÑÐºÐ¸Ð¹ ÑÐºÑÐ¸Ð½Ð¸Ð½Ð³ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¹</h2>
+<div class="info" id="screeningInfo">ÐÐ½Ð°Ð»Ð¸Ð· Ð·Ð°Ð¿ÑÑÐµÐ½. ÐÐµÑÐ²ÑÐ¹ ÑÐ°ÑÑÑÑ Ð¼Ð¾Ð¶ÐµÑ Ð·Ð°Ð½ÑÑÑ 1-3 Ð¼Ð¸Ð½ÑÑÑ...</div>
+<div id="screeningPassed" style="margin-top:15px"></div>
 <details>
-<summary>❌ Отклонённые стратегии (нажмите чтобы развернуть)</summary>
-<div class="table-wrap" id="screeningRejected" style="margin-top:12px"></div>
+<summary>â ÐÑÐºÐ»Ð¾Ð½ÑÐ½Ð½ÑÐµ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¸ (Ð½Ð°Ð¶Ð¼Ð¸ÑÐµ ÑÑÐ¾Ð±Ñ ÑÐ°Ð·Ð²ÐµÑÐ½ÑÑÑ)</summary>
+<div id="screeningRejected" style="margin-top:12px"></div>
 </details>
 </div>
 
 <div class="card" id="riskCard">
-<h2>⚙️ Управление бэктестом</h2>
+<h2>âï¸ Ð£Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¸Ðµ Ð±ÑÐºÑÐµÑÑÐ¾Ð¼</h2>
 <div class="info">
-<b>Таймфрейм (для карточек ниже):</b><br>
+<b>Ð¢Ð°Ð¹Ð¼ÑÑÐµÐ¹Ð¼ (Ð´Ð»Ñ ÐºÐ°ÑÑÐ¾ÑÐµÐº Ð½Ð¸Ð¶Ðµ):</b><br>
 <select id="intervalSelect" style="width:100%" onchange="onIntervalChange()">
-<option value="CANDLE_INTERVAL_5_MIN">5 минут</option>
-<option value="CANDLE_INTERVAL_15_MIN">15 минут</option>
-<option value="CANDLE_INTERVAL_HOUR">1 час</option>
-<option value="CANDLE_INTERVAL_4_HOUR">4 часа</option>
-<option value="CANDLE_INTERVAL_DAY">1 день</option>
+<option value="CANDLE_INTERVAL_5_MIN">5 Ð¼Ð¸Ð½ÑÑ</option>
+<option value="CANDLE_INTERVAL_15_MIN">15 Ð¼Ð¸Ð½ÑÑ</option>
+<option value="CANDLE_INTERVAL_HOUR">1 ÑÐ°Ñ</option>
+<option value="CANDLE_INTERVAL_4_HOUR">4 ÑÐ°ÑÐ°</option>
+<option value="CANDLE_INTERVAL_DAY">1 Ð´ÐµÐ½Ñ</option>
 </select>
 <br><br>
-<b>Глубина истории (дней):</b><br>
+<b>ÐÐ»ÑÐ±Ð¸Ð½Ð° Ð¸ÑÑÐ¾ÑÐ¸Ð¸ (Ð´Ð½ÐµÐ¹):</b><br>
 <input type="number" id="historyDaysInput" min="1" max="180" step="1" style="width:100%">
 <div style="font-size:11px;color:#7a8394;margin-top:4px" id="historyHint"></div>
 <br>
-<b>🛡️ Риск-менеджмент</b><br><br>
-<label><input type="checkbox" id="useSL"> Стоп-лосс</label>
-<input type="number" id="slMult" step="0.1" min="0.5" style="width:70px"> × ATR<br>
-<label><input type="checkbox" id="useTP"> Тейк-профит</label>
-<input type="number" id="tpMult" step="0.1" min="0.5" style="width:70px"> × ATR<br>
-<label><input type="checkbox" id="useBE"> Безубыток</label>
-<input type="number" id="beTrig" step="0.1" min="0.1" style="width:70px"> × ATR<br><br>
-<button onclick="saveRiskSettings()">💾 Сохранить</button>
-<button onclick="loadData()">🔄 Пересчитать</button>
+<b>ð¡ï¸ Ð Ð¸ÑÐº-Ð¼ÐµÐ½ÐµÐ´Ð¶Ð¼ÐµÐ½Ñ</b><br><br>
+<label><input type="checkbox" id="useSL"> Ð¡ÑÐ¾Ð¿-Ð»Ð¾ÑÑ</label>
+<input type="number" id="slMult" step="0.1" min="0.5" style="width:70px"> Ã ATR<br>
+<label><input type="checkbox" id="useTP"> Ð¢ÐµÐ¹Ðº-Ð¿ÑÐ¾ÑÐ¸Ñ</label>
+<input type="number" id="tpMult" step="0.1" min="0.5" style="width:70px"> Ã ATR<br>
+<label><input type="checkbox" id="useBE"> ÐÐµÐ·ÑÐ±ÑÑÐ¾Ðº</label>
+<input type="number" id="beTrig" step="0.1" min="0.1" style="width:70px"> Ã ATR<br><br>
+<button onclick="saveRiskSettings()">ð¾ Ð¡Ð¾ÑÑÐ°Ð½Ð¸ÑÑ</button>
+<button onclick="loadData()">ð ÐÐµÑÐµÑÑÐ¸ÑÐ°ÑÑ</button>
 </div>
 </div>
 
-<div class="section-title">📊 ФЬЮЧЕРСЫ</div><div class="grid" id="futures"></div>
-<div class="section-title">📈 АКЦИИ</div><div class="grid" id="shares"></div>
+<div class="section-title">ð Ð¤Ð¬Ð®Ð§ÐÐ Ð¡Ð«</div><div class="grid" id="futures"></div>
+<div class="section-title">ð ÐÐÐ¦ÐÐ</div><div class="grid" id="shares"></div>
 
-<div class="card statistics"><h2>📊 Общая статистика</h2><div class="stats-grid" id="statistics"></div></div>
-<div class="card history"><h2>📜 История сделок</h2><div class="table-wrap" id="history"></div></div>
+<div class="card statistics"><h2>ð ÐÐ±ÑÐ°Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ°</h2><div class="stats-grid" id="statistics"></div></div>
+<div class="card history"><h2>ð ÐÑÑÐ¾ÑÐ¸Ñ ÑÐ´ÐµÐ»Ð¾Ðº</h2><div class="table-wrap" id="history"></div></div>
 
-<div class="card settings"><h2>ℹ️ Параметры</h2>
-Размер виртуальной позиции: <b id="positionSize">---</b> ₽<br>
-Комиссия покупки: <b id="buyCommission">---</b>%<br>
-Комиссия продажи: <b id="sellCommission">---</b>%<br>
-Налог: <b id="tax">---</b>%<br>
-Таймфрейм: <b id="interval">---</b><br>
-История: <b id="historyDays">---</b> дней<br>
-Стратегий: <b id="strategiesCount">---</b><br>
-Выход из сделки: <b id="exitRule">---</b></div>
+<div class="card settings"><h2>â¹ï¸ ÐÐ°ÑÐ°Ð¼ÐµÑÑÑ</h2>
+Ð Ð°Ð·Ð¼ÐµÑ Ð²Ð¸ÑÑÑÐ°Ð»ÑÐ½Ð¾Ð¹ Ð¿Ð¾Ð·Ð¸ÑÐ¸Ð¸: <b id="positionSize">---</b> â½<br>
+ÐÐ¾Ð¼Ð¸ÑÑÐ¸Ñ Ð¿Ð¾ÐºÑÐ¿ÐºÐ¸: <b id="buyCommission">---</b>%<br>
+ÐÐ¾Ð¼Ð¸ÑÑÐ¸Ñ Ð¿ÑÐ¾Ð´Ð°Ð¶Ð¸: <b id="sellCommission">---</b>%<br>
+ÐÐ°Ð»Ð¾Ð³: <b id="tax">---</b>%<br>
+Ð¢Ð°Ð¹Ð¼ÑÑÐµÐ¹Ð¼: <b id="interval">---</b><br>
+ÐÑÑÐ¾ÑÐ¸Ñ: <b id="historyDays">---</b> Ð´Ð½ÐµÐ¹<br>
+Ð¡ÑÑÐ°ÑÐµÐ³Ð¸Ð¹: <b id="strategiesCount">---</b><br>
+ÐÑÑÐ¾Ð´ Ð¸Ð· ÑÐ´ÐµÐ»ÐºÐ¸: <b id="exitRule">---</b></div>
 
 </div>
 
@@ -1465,14 +1480,14 @@ details summary{cursor:pointer;color:#d7aa52;font-weight:bold;margin-top:20px;pa
 function money(v){return Number(v||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function signalClass(s){return s==='LONG'?'long':s==='SHORT'?'short':'none'}
 
-const MAX_HISTORY_DAYS_JS = {"CANDLE_INTERVAL_5_MIN":14,"CANDLE_INTERVAL_15_MIN":30,"CANDLE_INTERVAL_HOUR":90,"CANDLE_INTERVAL_4_HOUR":180,"CANDLE_INTERVAL_DAY":365};
-const DEFAULT_HISTORY_FOR_INTERVAL_JS = {"CANDLE_INTERVAL_5_MIN":7,"CANDLE_INTERVAL_15_MIN":14,"CANDLE_INTERVAL_HOUR":60,"CANDLE_INTERVAL_4_HOUR":60,"CANDLE_INTERVAL_DAY":60};
-const INTERVAL_LABELS = {"CANDLE_INTERVAL_5_MIN":"5 минут","CANDLE_INTERVAL_15_MIN":"15 минут","CANDLE_INTERVAL_HOUR":"1 час","CANDLE_INTERVAL_4_HOUR":"4 часа","CANDLE_INTERVAL_DAY":"1 день"};
+const MAX_HISTORY_DAYS_JS = {"CANDLE_INTERVAL_5_MIN":7,"CANDLE_INTERVAL_15_MIN":14,"CANDLE_INTERVAL_HOUR":30,"CANDLE_INTERVAL_4_HOUR":90,"CANDLE_INTERVAL_DAY":365};
+const DEFAULT_HISTORY_FOR_INTERVAL_JS = {"CANDLE_INTERVAL_5_MIN":5,"CANDLE_INTERVAL_15_MIN":10,"CANDLE_INTERVAL_HOUR":30,"CANDLE_INTERVAL_4_HOUR":60,"CANDLE_INTERVAL_DAY":60};
+const INTERVAL_LABELS = {"CANDLE_INTERVAL_5_MIN":"5 Ð¼Ð¸Ð½ÑÑ","CANDLE_INTERVAL_15_MIN":"15 Ð¼Ð¸Ð½ÑÑ","CANDLE_INTERVAL_HOUR":"1 ÑÐ°Ñ","CANDLE_INTERVAL_4_HOUR":"4 ÑÐ°ÑÐ°","CANDLE_INTERVAL_DAY":"1 Ð´ÐµÐ½Ñ"};
 
 function updateHistoryHint(interval){
   const hint=document.getElementById('historyHint');
   const maxDays=MAX_HISTORY_DAYS_JS[interval]||60;
-  hint.textContent='Максимум для '+(INTERVAL_LABELS[interval]||interval)+': '+maxDays+' дней';
+  hint.textContent='ÐÐ°ÐºÑÐ¸Ð¼ÑÐ¼ Ð´Ð»Ñ '+(INTERVAL_LABELS[interval]||interval)+': '+maxDays+' Ð´Ð½ÐµÐ¹';
 }
 function onIntervalChange(){
   const interval=document.getElementById('intervalSelect').value;
@@ -1486,26 +1501,26 @@ function onIntervalChange(){
 function renderInstrumentCard(item){
   const signal=item.strategy.signal;
   const stats=item.statistics||{};
-  let open='Нет';
-  if(item.open_position) open=item.open_position.direction+' от '+money(item.open_position.entry_price);
-  return `<div class="card"><h2>${item.emoji} ${item.title}</h2><span class="status ${item.status==='OK'?'':'error'}">${item.status}</span><div class="info">${item.message||''}</div><div class="info">Тикер: <b>${item.ticker}</b><br>UID: <b>${item.uid}</b><br>Свечей: <b>${item.candles}</b></div><div class="signal ${signalClass(signal)}">${signal}</div><div class="info">${item.strategy.description||''}</div><div class="info selected"><b>🤖 Выбрана: ${item.selected_strategy}</b><br>${item.selection_reason||''}<br>Сделок: <b>${stats.total||0}</b> · Winrate: <b>${stats.winrate||0}%</b><br>Прибыльных: <b>${stats.profitable||0}</b> · Убыточных: <b>${stats.losing||0}</b><br>Чистый: <b>${money(stats.net)} ₽</b><br>Открытая позиция: <b>${open}</b></div><div class="strategy-box"><b>🔬 Все стратегии</b>${(item.strategy_selection||[]).map((r,i)=>`<div class="strategy-row ${r.is_selected?'selected':''}"><span>${r.is_selected?'⭐ ':''}${i+1}. ${r.name}</span><span>${r.statistics.total} сдел.</span><span>${r.statistics.winrate}%</span><span class="${r.statistics.net>=0?'positive':'negative'}">${money(r.statistics.net)} ₽</span><span>DD ${money(r.drawdown)} ₽</span><span>${r.reason}</span></div>`).join('')}</div></div>`;
+  let open='ÐÐµÑ';
+  if(item.open_position) open=item.open_position.direction+' Ð¾Ñ '+money(item.open_position.entry_price);
+  return `<div class="card"><h2>${item.emoji} ${item.title}</h2><span class="status ${item.status==='OK'?'':'error'}">${item.status}</span><div class="info">${item.message||''}</div><div class="info">Ð¢Ð¸ÐºÐµÑ: <b>${item.ticker}</b><br>UID: <b>${item.uid}</b><br>Ð¡Ð²ÐµÑÐµÐ¹: <b>${item.candles}</b></div><div class="signal ${signalClass(signal)}">${signal}</div><div class="info">${item.strategy.description||''}</div><div class="info selected"><b>ð¤ ÐÑÐ±ÑÐ°Ð½Ð°: ${item.selected_strategy}</b><br>${item.selection_reason||''}<br>Ð¡Ð´ÐµÐ»Ð¾Ðº: <b>${stats.total||0}</b> Â· Winrate: <b>${stats.winrate||0}%</b><br>ÐÑÐ¸Ð±ÑÐ»ÑÐ½ÑÑ: <b>${stats.profitable||0}</b> Â· Ð£Ð±ÑÑÐ¾ÑÐ½ÑÑ: <b>${stats.losing||0}</b><br>Ð§Ð¸ÑÑÑÐ¹: <b>${money(stats.net)} â½</b><br>ÐÑÐºÑÑÑÐ°Ñ Ð¿Ð¾Ð·Ð¸ÑÐ¸Ñ: <b>${open}</b></div><div class="strategy-box"><b>ð¬ ÐÑÐµ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¸</b>${(item.strategy_selection||[]).map((r,i)=>`<div class="strategy-row ${r.is_selected?'selected':''}"><span>${r.is_selected?'â­ ':''}${i+1}. ${r.name}</span><span>${r.statistics.total} ÑÐ´ÐµÐ».</span><span>${r.statistics.winrate}%</span><span class="${r.statistics.net>=0?'positive':'negative'}">${money(r.statistics.net)} â½</span><span>DD ${money(r.drawdown)} â½</span><span>${r.reason}</span></div>`).join('')}</div></div>`;
 }
 function renderFutures(data){document.getElementById('futures').innerHTML=data.futures.map(renderInstrumentCard).join('')}
 function renderShares(data){document.getElementById('shares').innerHTML=data.shares.map(renderInstrumentCard).join('')}
 function renderStatistics(s){
-  document.getElementById('statistics').innerHTML=`<div class="stat"><div class="stat-title">Всего сделок</div><div class="stat-value">${s.total}</div></div><div class="stat"><div class="stat-title">Прибыльных</div><div class="stat-value">${s.profitable}</div></div><div class="stat"><div class="stat-title">Убыточных</div><div class="stat-value">${s.losing}</div></div><div class="stat"><div class="stat-title">Winrate</div><div class="stat-value">${s.winrate}%</div></div><div class="stat"><div class="stat-title">До расходов</div><div class="stat-value">${money(s.gross)} ₽</div></div><div class="stat"><div class="stat-title">Комиссии</div><div class="stat-value">${money(s.commission)} ₽</div></div><div class="stat"><div class="stat-title">Налог</div><div class="stat-value">${money(s.tax)} ₽</div></div><div class="stat"><div class="stat-title">ЧИСТЫЙ РЕЗУЛЬТАТ</div><div class="stat-value ${s.net>=0?'positive':'negative'}">${money(s.net)} ₽</div></div>`;
+  document.getElementById('statistics').innerHTML=`<div class="stat"><div class="stat-title">ÐÑÐµÐ³Ð¾ ÑÐ´ÐµÐ»Ð¾Ðº</div><div class="stat-value">${s.total}</div></div><div class="stat"><div class="stat-title">ÐÑÐ¸Ð±ÑÐ»ÑÐ½ÑÑ</div><div class="stat-value">${s.profitable}</div></div><div class="stat"><div class="stat-title">Ð£Ð±ÑÑÐ¾ÑÐ½ÑÑ</div><div class="stat-value">${s.losing}</div></div><div class="stat"><div class="stat-title">Winrate</div><div class="stat-value">${s.winrate}%</div></div><div class="stat"><div class="stat-title">ÐÐ¾ ÑÐ°ÑÑÐ¾Ð´Ð¾Ð²</div><div class="stat-value">${money(s.gross)} â½</div></div><div class="stat"><div class="stat-title">ÐÐ¾Ð¼Ð¸ÑÑÐ¸Ð¸</div><div class="stat-value">${money(s.commission)} â½</div></div><div class="stat"><div class="stat-title">ÐÐ°Ð»Ð¾Ð³</div><div class="stat-value">${money(s.tax)} â½</div></div><div class="stat"><div class="stat-title">Ð§ÐÐ¡Ð¢Ð«Ð Ð ÐÐÐ£ÐÐ¬Ð¢ÐÐ¢</div><div class="stat-value ${s.net>=0?'positive':'negative'}">${money(s.net)} â½</div></div>`;
 }
 function renderHistory(data){
   let all=[];
   [...data.futures,...data.shares].forEach(x=>all=all.concat(x.history||[]));
   all.sort((a,b)=>new Date(b.exit_time)-new Date(a.exit_time));
   const c=document.getElementById('history');
-  if(!all.length){c.innerHTML='Пока закрытых сделок нет.';return}
-  let h='<table><thead><tr><th>Инструмент</th><th>Напр.</th><th>Вход</th><th>Выход</th><th>Цена входа</th><th>Цена выхода</th><th>Причина</th><th>Результат</th><th>Комиссия</th><th>Налог</th><th>Чистый</th></tr></thead><tbody>';
+  if(!all.length){c.innerHTML='ÐÐ¾ÐºÐ° Ð·Ð°ÐºÑÑÑÑÑ ÑÐ´ÐµÐ»Ð¾Ðº Ð½ÐµÑ.';return}
+  let h='<table><thead><tr><th>ÐÐ½ÑÑÑÑÐ¼ÐµÐ½Ñ</th><th>ÐÐ°Ð¿Ñ.</th><th>ÐÑÐ¾Ð´</th><th>ÐÑÑÐ¾Ð´</th><th>Ð¦ÐµÐ½Ð° Ð²ÑÐ¾Ð´Ð°</th><th>Ð¦ÐµÐ½Ð° Ð²ÑÑÐ¾Ð´Ð°</th><th>ÐÑÐ¸ÑÐ¸Ð½Ð°</th><th>Ð ÐµÐ·ÑÐ»ÑÑÐ°Ñ</th><th>ÐÐ¾Ð¼Ð¸ÑÑÐ¸Ñ</th><th>ÐÐ°Ð»Ð¾Ð³</th><th>Ð§Ð¸ÑÑÑÐ¹</th></tr></thead><tbody>';
   all.slice(0,100).forEach(t=>{
     const n=Number(t.net_result||0);
     const commission=Number(t.buy_commission||0)+Number(t.sell_commission||0);
-    h+=`<tr><td>${t.title}</td><td>${t.direction}</td><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.entry_price}</td><td>${t.exit_price}</td><td>${t.exit_reason||'---'}</td><td>${money(t.gross_result)} ₽</td><td>${money(commission)} ₽</td><td>${money(t.tax)} ₽</td><td class="${n>=0?'positive':'negative'}">${money(n)} ₽</td></tr>`;
+    h+=`<tr><td>${t.title}</td><td>${t.direction}</td><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.entry_price}</td><td>${t.exit_price}</td><td>${t.exit_reason||'---'}</td><td>${money(t.gross_result)} â½</td><td>${money(commission)} â½</td><td>${money(t.tax)} â½</td><td class="${n>=0?'positive':'negative'}">${money(n)} â½</td></tr>`;
   });
   c.innerHTML=h+'</tbody></table>';
 }
@@ -1529,31 +1544,53 @@ function renderScreening(data){
   const passedEl=document.getElementById('screeningPassed');
   const rejectedEl=document.getElementById('screeningRejected');
   if(!data || data.error){
-    info.innerHTML='Ошибка: '+(data && data.error ? data.error : 'нет данных');
+    info.innerHTML='ÐÑÐ¸Ð±ÐºÐ°: '+(data && data.error ? data.error : 'Ð½ÐµÑ Ð´Ð°Ð½Ð½ÑÑ');
     return;
   }
   const passedCount=data.passed_count||0;
   const rejectedCount=data.rejected_count||0;
-  const updatedAt=data.updated_at?new Date(data.updated_at).toLocaleString('ru-RU'):'—';
+  const updatedAt=data.updated_at?new Date(data.updated_at).toLocaleString('ru-RU'):'â';
   if(passedCount===0){
-    info.innerHTML=`<b style="color:#ff6666">⚠️ Ни одна стратегия не прошла фильтр</b><br>Проверено ${rejectedCount} комбинаций (инструмент × таймфрейм × стратегия).<br>Критерии: ≥${20} сделок, WR ≥45%, чистый плюс, P/DD ≥1.5.<br><span style="color:#8f99aa;font-size:12px">Обновлено: ${updatedAt}</span>`;
+    info.innerHTML=`<b style="color:#ff6666">â ï¸ ÐÐ¸ Ð¾Ð´Ð½Ð° ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ Ð½Ðµ Ð¿ÑÐ¾ÑÐ»Ð° ÑÐ¸Ð»ÑÑÑ</b><br>ÐÑÐ¾Ð²ÐµÑÐµÐ½Ð¾ ${rejectedCount} ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°ÑÐ¸Ð¹ (Ð¸Ð½ÑÑÑÑÐ¼ÐµÐ½Ñ Ã ÑÐ°Ð¹Ð¼ÑÑÐµÐ¹Ð¼ Ã ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ).<br>ÐÑÐ¸ÑÐµÑÐ¸Ð¸: â¥15 ÑÐ´ÐµÐ»Ð¾Ðº, WR â¥40%, ÑÐ¸ÑÑÑÐ¹ Ð¿Ð»ÑÑ, P/DD â¥1.0.<br><span style="color:#8f99aa;font-size:12px">ÐÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾: ${updatedAt}</span>`;
     passedEl.innerHTML='';
   }else{
-    info.innerHTML=`<b style="color:#52e58a">✅ Найдено рабочих стратегий: ${passedCount}</b> (отклонено: ${rejectedCount})<br><span style="color:#8f99aa;font-size:12px">Обновлено: ${updatedAt}. Топ-10 по P/DD:</span>`;
-    let h='<table><thead><tr><th>Инструмент</th><th>Таймфрейм</th><th>Стратегия</th><th>Сделок</th><th>Winrate</th><th>Чистый</th><th>DD</th><th>P/DD</th></tr></thead><tbody>';
+    info.innerHTML=`<b style="color:#52e58a">â ÐÐ°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ°Ð±Ð¾ÑÐ¸Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¹: ${passedCount}</b> (Ð¾ÑÐºÐ»Ð¾Ð½ÐµÐ½Ð¾: ${rejectedCount})<br><span style="color:#8f99aa;font-size:12px">ÐÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾: ${updatedAt}. Ð¢Ð¾Ð¿-10 Ð¿Ð¾ P/DD:</span>`;
+    let h='';
     data.passed.slice(0,10).forEach(r=>{
-      h+=`<tr><td>${r.instrument}</td><td>${r.interval}</td><td>${r.strategy}</td><td>${r.trades}</td><td>${r.winrate}%</td><td class="positive">${money(r.net)} ₽</td><td>${money(r.drawdown)} ₽</td><td class="positive">${r.ratio}</td></tr>`;
+      h+=`<div class="screening-card">
+        <div class="sc-title">${r.strategy}</div>
+        <div class="sc-sub">${r.instrument} Â· ${r.interval}</div>
+        <div class="screening-grid">
+          <div><span class="screening-label">Ð¡Ð´ÐµÐ»Ð¾Ðº:</span> <b>${r.trades}</b></div>
+          <div><span class="screening-label">WR:</span> <b>${r.winrate}%</b></div>
+          <div><span class="screening-label">P/DD:</span> <b class="positive">${r.ratio}</b></div>
+        </div>
+        <div class="screening-grid-2">
+          <div><span class="screening-label">Ð§Ð¸ÑÑÑÐ¹:</span> <b class="positive">${money(r.net)} â½</b></div>
+          <div><span class="screening-label">DD:</span> <b>${money(r.drawdown)} â½</b></div>
+        </div>
+      </div>`;
     });
-    passedEl.innerHTML=h+'</tbody></table>';
+    passedEl.innerHTML=h;
   }
   if(rejectedEl && data.rejected && data.rejected.length){
-    let h='<table><thead><tr><th>Инструмент</th><th>Таймфрейм</th><th>Стратегия</th><th>Сделок</th><th>Winrate</th><th>Чистый</th><th>Причина</th></tr></thead><tbody>';
+    let h='';
     data.rejected.slice(0,60).forEach(r=>{
-      h+=`<tr><td>${r.instrument}</td><td>${r.interval}</td><td>${r.strategy}</td><td>${r.trades||0}</td><td>${r.winrate||0}%</td><td class="${(r.net||0)>=0?'positive':'negative'}">${money(r.net||0)} ₽</td><td style="color:#ff8585">${r.reason||'—'}</td></tr>`;
+      const netClass=(r.net||0)>=0?'positive':'negative';
+      h+=`<div class="screening-card-rej">
+        <div class="sc-title">${r.strategy}</div>
+        <div class="sc-sub">${r.instrument} Â· ${r.interval}</div>
+        <div class="sc-meta">
+          <span>Ð¡Ð´ÐµÐ»Ð¾Ðº: <b>${r.trades||0}</b></span> Â·
+          <span>WR: <b>${r.winrate||0}%</b></span> Â·
+          <span>Net: <b class="${netClass}">${money(r.net||0)} â½</b></span>
+        </div>
+        <div class="sc-reason">${r.reason||'â'}</div>
+      </div>`;
     });
-    rejectedEl.innerHTML=h+'</tbody></table>';
+    rejectedEl.innerHTML=h;
   }else if(rejectedEl){
-    rejectedEl.innerHTML='Нет данных.';
+    rejectedEl.innerHTML='ÐÐµÑ Ð´Ð°Ð½Ð½ÑÑ.';
   }
 }
 async function saveRiskSettings(){
@@ -1569,8 +1606,8 @@ async function saveRiskSettings(){
   };
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const res=await r.json();
-  if(res.ok){alert('Настройки сохранены. Пересчитываю...');loadData();}
-  else{alert('Ошибка: '+res.error);}
+  if(res.ok){alert('ÐÐ°ÑÑÑÐ¾Ð¹ÐºÐ¸ ÑÐ¾ÑÑÐ°Ð½ÐµÐ½Ñ. ÐÐµÑÐµÑÑÐ¸ÑÑÐ²Ð°Ñ...');loadData();}
+  else{alert('ÐÑÐ¸Ð±ÐºÐ°: '+res.error);}
 }
 async function loadData(){
   try{
@@ -1579,7 +1616,7 @@ async function loadData(){
     if(data.error){console.error(data.error);return}
     renderFutures(data);renderShares(data);renderStatistics(data.statistics);renderHistory(data);
     if(data.risk_settings) renderRiskSettings(data.risk_settings);
-    document.getElementById('updated').textContent='Обновлено: '+new Date(data.updated).toLocaleString('ru-RU');
+    document.getElementById('updated').textContent='ÐÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾: '+new Date(data.updated).toLocaleString('ru-RU');
     document.getElementById('positionSize').textContent=money(data.settings.position_size);
     document.getElementById('buyCommission').textContent=data.settings.buy_commission;
     document.getElementById('sellCommission').textContent=data.settings.sell_commission;
@@ -1588,14 +1625,14 @@ async function loadData(){
     document.getElementById('historyDays').textContent=data.settings.history_days;
     document.getElementById('strategiesCount').textContent=data.settings.strategies_count;
     document.getElementById('exitRule').textContent=data.settings.exit_rule;
-  }catch(e){console.error('Ошибка загрузки:',e)}
+  }catch(e){console.error('ÐÑÐ¸Ð±ÐºÐ° Ð·Ð°Ð³ÑÑÐ·ÐºÐ¸:',e)}
 }
 async function loadScreening(){
   try{
     const r=await fetch('/api/screening');
     const data=await r.json();
     renderScreening(data);
-  }catch(e){console.error('Ошибка загрузки скрининга:',e)}
+  }catch(e){console.error('ÐÑÐ¸Ð±ÐºÐ° Ð·Ð°Ð³ÑÑÐ·ÐºÐ¸ ÑÐºÑÐ¸Ð½Ð¸Ð½Ð³Ð°:',e)}
 }
 loadData();
 loadScreening();
