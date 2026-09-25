@@ -1077,19 +1077,20 @@ def screen_strategies_for_instrument(instrument, title, instrument_code):
         try:
             candles_raw = get_candles(instrument["instrument_uid"], temp_settings)
             candles = normalize_candles(candles_raw)
-except Exception as exc:
-    log.warning("Ошибка получения свечей %s/%s: %s", title, interval_label, exc)
-    candles = []
+        except Exception as exc:
+            log.warning("Ошибка получения свечей %s/%s: %s", title, interval_label, exc)
+            candles = []
+
         if len(candles) < 40:
-    rejected.append({
-        "instrument": title, "ticker": instrument.get("ticker", "—"),
-        "interval": interval_label, "interval_key": interval,
-        "strategy": "—", "strategy_key": "—",
-        "trades": 0, "winrate": 0, "net": 0, "drawdown": 0, "ratio": 0,
-        "candles": len(candles),
-        "reason": f"мало свечей ({len(candles)})",
-    })
-    continue
+            rejected.append({
+                "instrument": title, "ticker": instrument.get("ticker", "—"),
+                "interval": interval_label, "interval_key": interval,
+                "strategy": "—", "strategy_key": "—",
+                "trades": 0, "winrate": 0, "net": 0, "drawdown": 0, "ratio": 0,
+                "candles": len(candles),
+                "reason": f"мало свечей ({len(candles)})",
+            })
+            continue
 
         for strategy in STRATEGIES:
             trades, _ = build_strategy_history(
