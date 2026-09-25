@@ -40,11 +40,11 @@ CANDLE_INTERVAL_DEFAULT = "CANDLE_INTERVAL_4_HOUR"
 HISTORY_DAYS_DEFAULT = 60
 
 CANDLE_INTERVALS = {
-    "CANDLE_INTERVAL_5_MIN": "5 Ð¼Ð¸Ð½ÑÑ",
-    "CANDLE_INTERVAL_15_MIN": "15 Ð¼Ð¸Ð½ÑÑ",
-    "CANDLE_INTERVAL_HOUR": "1 ÑÐ°Ñ",
-    "CANDLE_INTERVAL_4_HOUR": "4 ÑÐ°ÑÐ°",
-    "CANDLE_INTERVAL_DAY": "1 Ð´ÐµÐ½Ñ",
+    "CANDLE_INTERVAL_5_MIN": "5 мин",
+    "CANDLE_INTERVAL_15_MIN": "15 мин",
+    "CANDLE_INTERVAL_HOUR": "1 час",
+    "CANDLE_INTERVAL_4_HOUR": "4 часа",
+    "CANDLE_INTERVAL_DAY": "1 день",
 }
 
 
@@ -132,7 +132,7 @@ def init_db():
                 );
             """)
             conn.commit()
-    log.info("Ð¢Ð°Ð±Ð»Ð¸ÑÐ° settings Ð³Ð¾ÑÐ¾Ð²Ð°.")
+    log.info("Таблица settings готова.")
 
 
 def get_token():
@@ -146,7 +146,7 @@ def get_token():
 def api_post(url, payload):
     token = get_token()
     if not token:
-        raise RuntimeError("API-ÑÐ¾ÐºÐµÐ½ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½. ÐÑÐ¾Ð²ÐµÑÑ Ð¿ÐµÑÐµÐ¼ÐµÐ½Ð½ÑÑ TINKOFF_TOKEN.")
+        raise RuntimeError("API-токен не найден. Проверь переменную TINKOFF_TOKEN.")
     response = requests.post(
         url,
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
@@ -159,7 +159,7 @@ def api_post(url, payload):
     try:
         return response.json()
     except Exception as exc:
-        raise RuntimeError("T-Bank Ð²ÐµÑÐ½ÑÐ» Ð¾ÑÐ²ÐµÑ, ÐºÐ¾ÑÐ¾ÑÑÐ¹ Ð½Ðµ ÑÐ´Ð°Ð»Ð¾ÑÑ Ð¿ÑÐ¾ÑÐ¸ÑÐ°ÑÑ ÐºÐ°Ðº JSON.") from exc
+        raise RuntimeError("T-Bank вернул ответ, который не удалось прочитать как JSON.") from exc
 
 
 def get_string(obj, key):
@@ -206,7 +206,7 @@ def get_all_futures():
             if isinstance(futures, list):
                 return futures
         except Exception as exc:
-            log.warning("ÐÑÐ¸Ð±ÐºÐ° Futures (%s): %s", status, exc)
+            log.warning("Ошибка Futures (%s): %s", status, exc)
     return []
 
 
@@ -217,18 +217,18 @@ def matches_future(future, prefix):
         get_string(future, "basicAsset").upper(),
     ])
     keywords = {
-        "CR": ["CR", "CNY", "YUAN", "CNH", "Ð®ÐÐ", "ÐÐÐ¢ÐÐ"],
-        "GD": ["GD", "GOLD", "ÐÐÐÐÐ¢"],
-        "BR": ["BR", "BRENT", "ÐÐÐ¤Ð¢"],
+        "CR": ["CR", "CNY", "YUAN", "CNH", "ЮАН", "КИТАЙ"],
+        "GD": ["GD", "GOLD", "ЗОЛОТ"],
+        "BR": ["BR", "BRENT", "НЕФТ"],
     }.get(prefix.upper(), [prefix.upper()])
     return any(word in text for word in keywords)
 
 
 def find_active_future(prefix):
     queries = {
-        "CR": ["CR", "CNY", "ÑÐ°Ð½Ñ", "CNY/RUB"],
-        "GD": ["GD", "GOLD", "Ð·Ð¾Ð»Ð¾ÑÐ¾"],
-        "BR": ["BR", "BRENT", "Ð½ÐµÑÑÑ"],
+        "CR": ["CR", "CNY", "юань", "CNY/RUB"],
+        "GD": ["GD", "GOLD", "золото"],
+        "BR": ["BR", "BRENT", "нефть"],
     }.get(prefix, [prefix])
 
     candidates = []
@@ -292,11 +292,10 @@ def find_active_future(prefix):
 
 
 STOCKS = [
-    {"code": "SBER", "title": "Ð¡Ð±ÐµÑÐ±Ð°Ð½Ðº", "emoji": "ð¦", "queries": ["SBER", "Ð¡Ð±ÐµÑÐ±Ð°Ð½Ðº"]},
-    {"code": "ROSN", "title": "Ð Ð¾ÑÐ½ÐµÑÑÑ", "emoji": "ð¢ï¸", "queries": ["ROSN", "Ð Ð¾ÑÐ½ÐµÑÑÑ"]},
-    {"code": "GMKN", "title": "ÐÐ¾ÑÐ½Ð¸ÐºÐµÐ»Ñ", "emoji": "âï¸", "queries": ["GMKN", "NORNICKEL", "ÐÐ¾ÑÐ½Ð¸ÐºÐµÐ»Ñ"]},
+    {"code": "SBER", "title": "Сбербанк", "emoji": "🏦", "queries": ["SBER", "Сбербанк"]},
+    {"code": "ROSN", "title": "Роснефть", "emoji": "🛢️", "queries": ["ROSN", "Роснефть"]},
+    {"code": "GMKN", "title": "Норникель", "emoji": "⛏️", "queries": ["GMKN", "NORNICKEL", "Норникель"]},
 ]
-
 
 def find_share(stock):
     candidates = []
@@ -309,7 +308,7 @@ def find_share(stock):
                 "apiTradeAvailableFlag": True,
             })
         except Exception as exc:
-            log.warning("FindInstrument Ð°ÐºÑÐ¸Ð¸ %s: %s", query, exc)
+            log.warning("FindInstrument акции %s: %s", query, exc)
             continue
         instruments = data.get("instruments", [])
         if not isinstance(instruments, list):
