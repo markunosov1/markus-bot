@@ -10,13 +10,8 @@ import requests
 import urllib3
 from flask import Flask, jsonify, render_template_string
 
-# ============================================================
-# MARKUS TRADE — CLEAN 4H VERSION
-# ============================================================
-
 APP_NAME = "Markus Trade"
 API_BASE = "https://invest-public-api.tbank.ru/rest"
-
 FIND_INSTRUMENT_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
 FUTURES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
 SHARES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Shares"
@@ -24,8 +19,7 @@ CANDLES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.MarketDataServi
 
 REQUEST_TIMEOUT = 30
 CANDLE_INTERVAL = "CANDLE_INTERVAL_4_HOUR"
-HISTORY_DAYS = 60
-HISTORY_HOURS = HISTORY_DAYS * 24
+HISTORY_HOURS = 24 * 60
 UPDATE_SECONDS = 300
 
 POSITION_SIZE_RUBLES = 100000.0
@@ -33,34 +27,16 @@ BUY_COMMISSION_PERCENT = 0.10
 SELL_COMMISSION_PERCENT = 0.10
 TAX_PERCENT = 13.0
 HISTORY_FILE = "trade_history.json"
+MIN_BACKTEST_TRADES = 3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("MARKUS_TRADE")
 
 app = Flask(__name__)
 
-@app.after_request
-def force_utf8(response):
-    if response.mimetype == "text/html":
-        response.headers["Content-Type"] = "text/html; charset=utf-8"
-    return response
-
-# Кэш данных: /api/status больше не выполняет долгий анализ внутри HTTP-запроса.
-# Это устраняет HTTP 500/таймауты Telegram WebView, если T-Bank отвечает долго.
-CACHE_LOCK = threading.Lock()
-DATA_CACHE = None
-DATA_CACHE_ERROR = "Анализ ещё не завершён. Нажмите «Обновить сейчас» или подождите первый запуск."
-
-
-# ============================================================
-# TOKEN / API
-# ============================================================
 
 def get_token():
     for name in ("TINKOFF_TOKEN", "TINVEST_TOKEN", "T_BANK_TOKEN", "API_TOKEN", "TOKEN"):
@@ -77,10 +53,7 @@ def api_post(url, payload):
 
     response = requests.post(
         url,
-        headers={
-            "Authorization": "Bearer " + token,
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
         json=payload,
         timeout=REQUEST_TIMEOUT,
         verify=False,
@@ -94,10 +67,6 @@ def api_post(url, payload):
     except Exception as exc:
         raise RuntimeError("T-Bank вернул ответ, который не удалось прочитать как JSON.") from exc
 
-
-# ============================================================
-# HELPERS
-# ============================================================
 
 def get_string(obj, key):
     value = obj.get(key)
@@ -135,10 +104,6 @@ def quotation_to_float(value):
         return 0.0
 
 
-# ============================================================
-# FUTURES
-# ============================================================
-
 def get_all_futures():
     for status in ("INSTRUMENT_STATUS_BASE", "INSTRUMENT_STATUS_ALL"):
         try:
@@ -147,89 +112,106 @@ def get_all_futures():
             if isinstance(futures, list):
                 return futures
         except Exception as exc:
-            log.warning("Не удалось получить список фьючерсов (%s): %s", status, exc)
+            log.warning("Ошибка Futures (%s): %s", status, exc)
     return []
 
 
 def matches_future(future, prefix):
-    ticker = get_string(future, "ticker").upper()
-    name = get_string(future, "name").upper()
-    basic_asset = get_string(future, "basicAsset").upper()
-    text = " ".join((ticker, name, basic_asset))
-
-    groups = {
-        "CR": ("CR", "CNY", "YUAN", "CNH", "ЮАН", "КИТАЙ"),
-        "GD": ("GD", "GOLD", "ЗОЛОТ"),
-        "BR": ("BR", "BRENT", "НЕФТ"),
-    }
-    return any(word in text for word in groups.get(prefix.upper(), (prefix.upper(),)))
+    text = " ".join([
+        get_string(future, "ticker").upper(),
+        get_string(future, "name").upper(),
+        get_string(future, "basicAsset").upper(),
+    ])
+    keywords = {
+        "CR": ["CR", "CNY", "YUAN", "CNH", "ЮАНЬ", "КИТАЙ"],
+        "GD": ["GD", "GOLD", "ЗОЛОТ"],
+        "BR": ["BR", "BRENT", "НЕФТ"],
+    }.get(prefix.upper(), [prefix.upper()])
+    return any(word in text for word in keywords)
 
 
 def find_active_future(prefix):
-    aliases = {
-        "CR": ("CR", "CNY", "юань", "CNY/RUB"),
-        "GD": ("GD", "GOLD", "золото"),
-        "BR": ("BR", "BRENT", "нефть"),
-    }.get(prefix, (prefix,))
+    queries = {
+        "CR": ["CR", "CNY", "юань", "CNY/RUB"],
+        "GD": ["GD", "GOLD", "золото"],
+        "BR": ["BR", "BRENT", "нефть"],
+    }.get(prefix, [prefix])
 
     candidates = []
     now = datetime.now(timezone.utc)
 
-    for query in aliases:
-        try:
-            data = api_post(
-                FIND_INSTRUMENT_URL,
-                {
+    # Сначала используем полный список фьючерсов; FindInstrument — как fallback.
+    for item in get_all_futures():
+        if not isinstance(item, dict) or not matches_future(item, prefix):
+            continue
+        uid = item.get("instrumentUid") or item.get("uid")
+        if not uid:
+            continue
+        last_trade = parse_date(item.get("lastTradeDate"))
+        first_trade = parse_date(item.get("firstTradeDate"))
+        if first_trade and now < first_trade:
+            continue
+        if last_trade and now > last_trade:
+            continue
+        candidates.append({
+            "ticker": get_string(item, "ticker"),
+            "name": get_string(item, "name"),
+            "uid": uid,
+            "instrument_uid": uid,
+            "first_trade": first_trade,
+            "last_trade": last_trade,
+            "class_code": get_string(item, "classCode"),
+            "basic_asset": get_string(item, "basicAsset"),
+        })
+
+    if not candidates:
+        for query in queries:
+            try:
+                data = api_post(FIND_INSTRUMENT_URL, {
                     "query": query,
                     "instrumentKind": "INSTRUMENT_TYPE_FUTURES",
                     "apiTradeAvailableFlag": True,
-                },
-            )
-        except Exception as exc:
-            log.warning("FindInstrument фьючерс %s: %s", query, exc)
-            continue
-
-        for item in data.get("instruments", []):
-            if not isinstance(item, dict) or not matches_future(item, prefix):
+                })
+            except Exception as exc:
+                log.warning("FindInstrument %s: %s", query, exc)
                 continue
 
-            uid = item.get("instrumentUid") or item.get("uid")
-            if not uid:
+            instruments = data.get("instruments", [])
+            if not isinstance(instruments, list):
                 continue
 
-            first_trade = parse_date(item.get("firstTradeDate"))
-            last_trade = parse_date(item.get("lastTradeDate"))
-            if first_trade and now < first_trade:
-                continue
-            if last_trade and now > last_trade:
-                continue
+            for item in instruments:
+                if not isinstance(item, dict) or not matches_future(item, prefix):
+                    continue
+                uid = item.get("instrumentUid") or item.get("uid")
+                if not uid:
+                    continue
+                first_trade = parse_date(item.get("firstTradeDate"))
+                last_trade = parse_date(item.get("lastTradeDate"))
+                if first_trade and now < first_trade:
+                    continue
+                if last_trade and now > last_trade:
+                    continue
+                candidates.append({
+                    "ticker": get_string(item, "ticker"),
+                    "name": get_string(item, "name"),
+                    "uid": uid,
+                    "instrument_uid": uid,
+                    "first_trade": first_trade,
+                    "last_trade": last_trade,
+                    "class_code": get_string(item, "classCode"),
+                    "basic_asset": get_string(item, "basicAsset"),
+                })
 
-            candidates.append({
-                "ticker": get_string(item, "ticker"),
-                "name": get_string(item, "name"),
-                "uid": uid,
-                "instrument_uid": uid,
-                "first_trade": first_trade,
-                "last_trade": last_trade,
-                "class_code": get_string(item, "classCode"),
-                "basic_asset": get_string(item, "basicAsset"),
-            })
-
-    unique = {item["instrument_uid"]: item for item in candidates}
+    unique = {x["instrument_uid"]: x for x in candidates}
     candidates = list(unique.values())
+
     if not candidates:
         return None
 
-    def expiry(item):
-        return item["last_trade"] or datetime.max.replace(tzinfo=timezone.utc)
-
-    candidates.sort(key=expiry)
+    candidates.sort(key=lambda x: x.get("last_trade") or datetime.max.replace(tzinfo=timezone.utc))
     return candidates[0]
 
-
-# ============================================================
-# SHARES
-# ============================================================
 
 STOCKS = [
     {"code": "SBER", "title": "Сбербанк", "emoji": "🏦", "queries": ["SBER", "Сбербанк"]},
@@ -244,41 +226,35 @@ def find_share(stock):
 
     for query in stock["queries"]:
         try:
-            data = api_post(
-                FIND_INSTRUMENT_URL,
-                {
-                    "query": query,
-                    "instrumentKind": "INSTRUMENT_TYPE_SHARE",
-                    "apiTradeAvailableFlag": True,
-                },
-            )
+            data = api_post(FIND_INSTRUMENT_URL, {
+                "query": query,
+                "instrumentKind": "INSTRUMENT_TYPE_SHARE",
+                "apiTradeAvailableFlag": True,
+            })
         except Exception as exc:
             log.warning("FindInstrument акции %s: %s", query, exc)
             continue
 
-        for item in data.get("instruments", []):
+        instruments = data.get("instruments", [])
+        if not isinstance(instruments, list):
+            continue
+
+        for item in instruments:
             if not isinstance(item, dict):
                 continue
-
             ticker = get_string(item, "ticker").upper()
             name = get_string(item, "name").upper()
-            figi = get_string(item, "figi").upper()
-            wanted = stock["code"].upper()
-
-            if wanted not in ticker and wanted not in figi and stock["title"].upper() not in name:
+            if stock["code"] not in ticker and stock["title"].upper() not in name:
                 continue
-
             uid = item.get("instrumentUid") or item.get("uid")
             if not uid:
                 continue
-
             first_trade = parse_date(item.get("firstTradeDate"))
             last_trade = parse_date(item.get("lastTradeDate"))
             if first_trade and now < first_trade:
                 continue
             if last_trade and now > last_trade:
                 continue
-
             candidates.append({
                 "ticker": get_string(item, "ticker"),
                 "name": get_string(item, "name"),
@@ -288,67 +264,38 @@ def find_share(stock):
                 "class_code": get_string(item, "classCode"),
             })
 
-    unique = {item["instrument_uid"]: item for item in candidates}
+    unique = {x["instrument_uid"]: x for x in candidates}
     candidates = list(unique.values())
+
     if not candidates:
         return None
 
-    exact = [x for x in candidates if x["ticker"].upper() == stock["code"].upper()]
+    exact = [x for x in candidates if x["ticker"].upper() == stock["code"]]
     return exact[0] if exact else candidates[0]
 
 
-# ============================================================
-# CANDLES — CHUNKED TO AVOID T-BANK PERIOD LIMIT
-# ============================================================
-
 def get_candles(instrument_uid):
-    """Получает 4H свечи небольшими кусками. При 30014 автоматически уменьшает кусок."""
     now = datetime.now(timezone.utc)
-    start = now - timedelta(days=HISTORY_DAYS)
-
-    all_candles = []
-    cursor = start
-    chunk_days = 7
-
-    while cursor < now:
-        chunk_end = min(cursor + timedelta(days=chunk_days), now)
-        payload = {
-            "from": cursor.isoformat(),
-            "to": chunk_end.isoformat(),
-            "interval": CANDLE_INTERVAL,
-            "instrumentId": instrument_uid,
-            "candleSourceType": "CANDLE_SOURCE_EXCHANGE",
-        }
-
-        try:
-            data = api_post(CANDLES_URL, payload)
-            candles = data.get("candles", [])
-            if isinstance(candles, list):
-                all_candles.extend(candles)
-            cursor = chunk_end
-        except Exception as exc:
-            text = str(exc)
-            # T-Bank code 30014: запрошенный период слишком большой.
-            if "30014" in text and chunk_days > 1:
-                chunk_days = max(1, chunk_days // 2)
-                log.warning("Слишком большой период свечей, уменьшаю кусок до %s дней", chunk_days)
-                continue
-            raise
-
-    return all_candles
+    start = now - timedelta(hours=HISTORY_HOURS)
+    data = api_post(CANDLES_URL, {
+        "from": start.isoformat(),
+        "to": now.isoformat(),
+        "interval": CANDLE_INTERVAL,
+        "instrumentId": instrument_uid,
+        "candleSourceType": "CANDLE_SOURCE_EXCHANGE",
+    })
+    candles = data.get("candles", [])
+    return candles if isinstance(candles, list) else []
 
 
 def normalize_candles(candles):
     result = []
-    seen = set()
-
     for candle in candles:
         if not isinstance(candle, dict):
             continue
         dt = parse_date(candle.get("time"))
         if not dt:
             continue
-
         item = {
             "time": dt.isoformat(),
             "open": quotation_to_float(candle.get("open")),
@@ -357,53 +304,55 @@ def normalize_candles(candles):
             "close": quotation_to_float(candle.get("close")),
             "volume": quotation_to_float(candle.get("volume")),
         }
-        if item["close"] <= 0:
-            continue
-        if item["time"] in seen:
-            continue
-        seen.add(item["time"])
-        result.append(item)
-
+        if item["close"] > 0 and item["high"] > 0 and item["low"] > 0:
+            result.append(item)
     result.sort(key=lambda x: x["time"])
     return result
 
 
-# ============================================================
-# INDICATORS
-# ============================================================
-
 def ema(values, period):
-    if len(values) < period or period <= 0:
+    if len(values) < period:
         return None
-    multiplier = 2.0 / (period + 1.0)
+    k = 2.0 / (period + 1.0)
     value = sum(values[:period]) / period
     for price in values[period:]:
-        value = (price - value) * multiplier + value
+        value = price * k + value * (1 - k)
     return value
 
 
-def bollinger_values(values, period=20, deviation=2.0):
+def sma(values, period):
     if len(values) < period:
         return None
-    window = values[-period:]
-    mean = sum(window) / period
-    variance = sum((x - mean) ** 2 for x in window) / period
-    std = variance ** 0.5
-    return mean, mean + deviation * std, mean - deviation * std
+    return sum(values[-period:]) / period
 
-
-# ============================================================
-# STRATEGIES
-# ============================================================
 
 def no_signal(description="Сигнал не сформирован"):
     return {"signal": "Нет сигналов", "direction": "—", "description": description}
 
 
+def bollinger_strategy(candles):
+    if len(candles) < 20:
+        return no_signal("Недостаточно свечей для Bollinger")
+    closes = [x["close"] for x in candles[-20:]]
+    mid = sum(closes) / 20
+    variance = sum((x - mid) ** 2 for x in closes) / 20
+    std = variance ** 0.5
+    upper = mid + 2 * std
+    lower = mid - 2 * std
+    last = closes[-1]
+    prev = closes[-2]
+    if prev <= lower and last > prev:
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": f"Цена отскочила от нижней полосы Bollinger ({lower:.2f})"}
+    if prev >= upper and last < prev:
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": f"Цена развернулась от верхней полосы Bollinger ({upper:.2f})"}
+    return no_signal(f"Цена внутри диапазона Bollinger: {lower:.2f}–{upper:.2f}")
+
+
 def user_strategy(candles):
     if len(candles) < 8:
-        return no_signal("Недостаточно свечей")
-
+        return no_signal("Недостаточно свечей для авторской стратегии")
     last = candles[-8:]
     highs = [x["high"] for x in last]
     lows = [x["low"] for x in last]
@@ -419,25 +368,28 @@ def user_strategy(candles):
     )
 
     if short_pattern:
-        return {"signal": "SHORT", "direction": "Вниз", "description": "Твоя стратегия: растущие максимумы → разворот вниз"}
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": "Авторская стратегия: растущие максимумы → подтверждённый разворот вниз"}
     if long_pattern:
-        return {"signal": "LONG", "direction": "Вверх", "description": "Твоя стратегия: снижающиеся минимумы → разворот вверх"}
-    return no_signal()
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": "Авторская стратегия: снижающиеся минимумы → подтверждённый разворот вверх"}
+    return no_signal("Нет полного совпадения условий авторской стратегии")
 
 
 def ema_trend_strategy(candles):
     if len(candles) < 30:
         return no_signal("Недостаточно свечей для EMA")
     closes = [x["close"] for x in candles]
-    e9 = ema(closes, 9)
-    e21 = ema(closes, 21)
+    e9, e21 = ema(closes, 9), ema(closes, 21)
     if e9 is None or e21 is None:
-        return no_signal()
+        return no_signal("EMA ещё не рассчитаны")
     if e9 > e21 and closes[-1] > e9 and closes[-1] > closes[-2]:
-        return {"signal": "LONG", "direction": "Вверх", "description": "EMA 9 выше EMA 21 и цена выше EMA 9"}
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": "EMA 9 выше EMA 21, цена выше EMA 9 и растёт"}
     if e9 < e21 and closes[-1] < e9 and closes[-1] < closes[-2]:
-        return {"signal": "SHORT", "direction": "Вниз", "description": "EMA 9 ниже EMA 21 и цена ниже EMA 9"}
-    return no_signal()
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": "EMA 9 ниже EMA 21, цена ниже EMA 9 и снижается"}
+    return no_signal("Нет подтверждения тренда EMA")
 
 
 def breakout_strategy(candles):
@@ -448,10 +400,12 @@ def breakout_strategy(candles):
     high = max(x["high"] for x in prev)
     low = min(x["low"] for x in prev)
     if last["close"] > high:
-        return {"signal": "LONG", "direction": "Вверх", "description": "Пробой максимума 20 предыдущих свечей"}
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": f"Закрытие пробило максимум 20 предыдущих свечей ({high:.2f})"}
     if last["close"] < low:
-        return {"signal": "SHORT", "direction": "Вниз", "description": "Пробой минимума 20 предыдущих свечей"}
-    return no_signal()
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": f"Закрытие пробило минимум 20 предыдущих свечей ({low:.2f})"}
+    return no_signal("Пробоя 20-свечного диапазона нет")
 
 
 def rsi_strategy(candles):
@@ -465,61 +419,42 @@ def rsi_strategy(candles):
         losses.append(max(-d, 0))
     avg_gain = sum(gains) / len(gains)
     avg_loss = sum(losses) / len(losses)
-    rsi = 100.0 if avg_loss == 0 else 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+    rsi = 100.0 if avg_loss == 0 else 100 - (100 / (1 + avg_gain / avg_loss))
     if rsi < 30 and closes[-1] > closes[-2]:
-        return {"signal": "LONG", "direction": "Вверх", "description": f"RSI перепродан ({rsi:.1f}) и цена разворачивается вверх"}
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": f"RSI перепродан ({rsi:.1f}) и цена разворачивается вверх"}
     if rsi > 70 and closes[-1] < closes[-2]:
-        return {"signal": "SHORT", "direction": "Вниз", "description": f"RSI перекуплен ({rsi:.1f}) и цена разворачивается вниз"}
-    return no_signal()
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": f"RSI перекуплен ({rsi:.1f}) и цена разворачивается вниз"}
+    return no_signal(f"RSI сейчас {rsi:.1f}; условия входа не выполнены")
 
 
 def macd_strategy(candles):
     if len(candles) < 36:
         return no_signal("Недостаточно свечей для MACD")
     closes = [x["close"] for x in candles]
-    fast = ema(closes, 12)
-    slow = ema(closes, 26)
-    prev_fast = ema(closes[:-1], 12)
-    prev_slow = ema(closes[:-1], 26)
+    fast, slow = ema(closes, 12), ema(closes, 26)
+    prev_fast, prev_slow = ema(closes[:-1], 12), ema(closes[:-1], 26)
     if None in (fast, slow, prev_fast, prev_slow):
-        return no_signal()
+        return no_signal("MACD ещё не рассчитан")
     if prev_fast <= prev_slow and fast > slow:
-        return {"signal": "LONG", "direction": "Вверх", "description": "MACD пересек сигнальную линию вверх"}
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": "EMA 12 пересекла EMA 26 снизу вверх"}
     if prev_fast >= prev_slow and fast < slow:
-        return {"signal": "SHORT", "direction": "Вниз", "description": "MACD пересек сигнальную линию вниз"}
-    return no_signal()
-
-
-def bollinger_strategy(candles):
-    if len(candles) < 21:
-        return no_signal("Недостаточно свечей для Bollinger")
-    closes = [x["close"] for x in candles]
-    values = bollinger_values(closes, 20, 2.0)
-    if values is None:
-        return no_signal()
-    middle, upper, lower = values
-    last = closes[-1]
-    prev = closes[-2]
-    if prev <= lower and last > prev:
-        return {"signal": "LONG", "direction": "Вверх", "description": "Цена вышла вверх из нижней полосы Bollinger"}
-    if prev >= upper and last < prev:
-        return {"signal": "SHORT", "direction": "Вниз", "description": "Цена вышла вниз из верхней полосы Bollinger"}
-    return no_signal(f"Bollinger: цена {last:.2f}, середина {middle:.2f}")
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": "EMA 12 пересекла EMA 26 сверху вниз"}
+    return no_signal("Пересечения MACD на последней свече нет")
 
 
 STRATEGIES = [
-    {"name": "Твоя стратегия", "key": "user", "fn": user_strategy},
-    {"name": "EMA Trend", "key": "ema", "fn": ema_trend_strategy},
-    {"name": "Breakout", "key": "breakout", "fn": breakout_strategy},
-    {"name": "RSI Reversal", "key": "rsi", "fn": rsi_strategy},
-    {"name": "MACD", "key": "macd", "fn": macd_strategy},
-    {"name": "Bollinger", "key": "bollinger", "fn": bollinger_strategy},
+    {"name": "Твоя стратегия", "key": "user", "fn": user_strategy, "min_bars": 8},
+    {"name": "EMA Trend", "key": "ema", "fn": ema_trend_strategy, "min_bars": 30},
+    {"name": "Breakout", "key": "breakout", "fn": breakout_strategy, "min_bars": 21},
+    {"name": "RSI Reversal", "key": "rsi", "fn": rsi_strategy, "min_bars": 16},
+    {"name": "MACD", "key": "macd", "fn": macd_strategy, "min_bars": 36},
+    {"name": "Bollinger", "key": "bollinger", "fn": bollinger_strategy, "min_bars": 20},
 ]
 
-
-# ============================================================
-# BACKTEST / STATISTICS
-# ============================================================
 
 def calculate_commission(amount, percent):
     return amount * percent / 100.0
@@ -530,88 +465,50 @@ def calculate_trade_result(direction, entry_price, exit_price):
         return None
 
     if direction == "LONG":
-        change = (exit_price - entry_price) / entry_price * 100.0
+        price_change_percent = (exit_price - entry_price) / entry_price * 100
     else:
-        change = (entry_price - exit_price) / entry_price * 100.0
+        price_change_percent = (entry_price - exit_price) / entry_price * 100
 
-    gross = POSITION_SIZE_RUBLES * change / 100.0
+    gross_result = POSITION_SIZE_RUBLES * price_change_percent / 100
     buy_commission = calculate_commission(POSITION_SIZE_RUBLES, BUY_COMMISSION_PERCENT)
     exit_amount = POSITION_SIZE_RUBLES * (exit_price / entry_price)
     sell_commission = calculate_commission(abs(exit_amount), SELL_COMMISSION_PERCENT)
-    tax = gross * TAX_PERCENT / 100.0 if gross > 0 else 0.0
-    net = gross - buy_commission - sell_commission - tax
+    tax = max(gross_result, 0) * TAX_PERCENT / 100
+    net_result = gross_result - buy_commission - sell_commission - tax
 
     return {
-        "price_change_percent": round(change, 4),
-        "gross_result": round(gross, 2),
+        "price_change_percent": round(price_change_percent, 4),
+        "gross_result": round(gross_result, 2),
         "buy_commission": round(buy_commission, 2),
         "sell_commission": round(sell_commission, 2),
         "tax": round(tax, 2),
-        "net_result": round(net, 2),
+        "net_result": round(net_result, 2),
     }
 
 
-def build_strategy_history(candles, instrument, title, strategy_fn):
-    """Единственная функция backtest. Четыре аргумента — без дублирования."""
-    if len(candles) < 8:
-        return [], None
+def calculate_statistics(trades):
+    total = len(trades)
+    if total == 0:
+        return {"total": 0, "profitable": 0, "losing": 0, "winrate": 0,
+                "gross": 0, "commission": 0, "tax": 0, "net": 0}
 
-    trades = []
-    position = None
+    profitable = sum(1 for t in trades if t.get("net_result", 0) > 0)
+    losing = sum(1 for t in trades if t.get("net_result", 0) < 0)
+    gross = sum(t.get("gross_result", 0) for t in trades)
+    commission = sum(t.get("buy_commission", 0) + t.get("sell_commission", 0) for t in trades)
+    tax = sum(t.get("tax", 0) for t in trades)
+    net = sum(t.get("net_result", 0) for t in trades)
 
-    for i in range(7, len(candles)):
-        window = candles[: i + 1]
-        analysis = strategy_fn(window)
-        signal = analysis.get("signal", "Нет сигналов")
-        candle = candles[i]
-        price = candle["close"]
-        candle_time = candle["time"]
-
-        if position is None:
-            if signal in ("LONG", "SHORT"):
-                position = {
-                    "instrument": instrument,
-                    "title": title,
-                    "direction": signal,
-                    "entry_price": price,
-                    "entry_time": candle_time,
-                }
-            continue
-
-        if signal == position["direction"] or signal == "Нет сигналов":
-            continue
-
-        if signal not in ("LONG", "SHORT"):
-            continue
-
-        result = calculate_trade_result(position["direction"], position["entry_price"], price)
-        if result is None:
-            position = None
-            continue
-
-        trade = {
-            "id": len(trades) + 1,
-            "instrument": instrument,
-            "title": title,
-            "direction": position["direction"],
-            "entry_time": position["entry_time"],
-            "exit_time": candle_time,
-            "entry_price": round(position["entry_price"], 8),
-            "exit_price": round(price, 8),
-            "exit_signal": signal,
-            **result,
-        }
-        trades.append(trade)
-
-        position = {
-            "instrument": instrument,
-            "title": title,
-            "direction": signal,
-            "entry_price": price,
-            "entry_time": candle_time,
-        }
-
-    return trades, position
+    return {
+        "total": total,
+        "profitable": profitable,
+        "losing": losing,
+        "winrate": round(profitable / total * 100, 2),
+        "gross": round(gross, 2),
+        "commission": round(commission, 2),
+        "tax": round(tax, 2),
+        "net": round(net, 2),
+    }
 
 
 def calculate_max_drawdown(trades):
@@ -625,59 +522,85 @@ def calculate_max_drawdown(trades):
     return round(abs(max_dd), 2)
 
 
-def calculate_statistics(trades):
-    total = len(trades)
-    if total == 0:
-        return {"total": 0, "profitable": 0, "losing": 0, "winrate": 0, "gross": 0, "commission": 0, "tax": 0, "net": 0}
+def build_strategy_history(candles, instrument, title, strategy_fn):
+    """Бэктест стратегии на ВСЕЙ доступной истории, а не только на 8 свечах."""
+    min_bars = 8
+    for s in STRATEGIES:
+        if s["fn"] is strategy_fn:
+            min_bars = s["min_bars"]
+            break
 
-    profitable = sum(1 for t in trades if t.get("net_result", 0) > 0)
-    losing = sum(1 for t in trades if t.get("net_result", 0) < 0)
-    gross = sum(t.get("gross_result", 0) for t in trades)
-    commission = sum(t.get("buy_commission", 0) + t.get("sell_commission", 0) for t in trades)
-    tax = sum(t.get("tax", 0) for t in trades)
-    net = sum(t.get("net_result", 0) for t in trades)
+    if len(candles) < min_bars:
+        return [], None
 
-    return {
-        "total": total,
-        "profitable": profitable,
-        "losing": losing,
-        "winrate": round(profitable / total * 100.0, 2),
-        "gross": round(gross, 2),
-        "commission": round(commission, 2),
-        "tax": round(tax, 2),
-        "net": round(net, 2),
-    }
+    trades = []
+    current_position = None
 
+    for i in range(min_bars - 1, len(candles)):
+        window = candles[: i + 1]
+        analysis = strategy_fn(window)
+        signal = analysis.get("signal", "Нет сигналов")
+        candle = candles[i]
+        price = candle["close"]
+        candle_time = candle["time"]
 
-def make_selection_reason(stats, drawdown, trade_count, selected=False):
-    if trade_count < 3:
-        return "Мало закрытых сделок для уверенного сравнения"
-    if selected:
-        return (
-            f"Выбрана по историческому тесту: {trade_count} сделок, "
-            f"проходимость {stats['winrate']}%, чистый результат {stats['net']:.2f} ₽, "
-            f"максимальная просадка {drawdown:.2f} ₽."
-        )
-    return (
-        f"Исторический тест: {trade_count} сделок, "
-        f"проходимость {stats['winrate']}%, чистый результат {stats['net']:.2f} ₽, "
-        f"просадка {drawdown:.2f} ₽."
-    )
+        if current_position is None:
+            if signal in ("LONG", "SHORT"):
+                current_position = {
+                    "instrument": instrument,
+                    "title": title,
+                    "direction": signal,
+                    "entry_price": price,
+                    "entry_time": candle_time,
+                }
+            continue
+
+        if signal == current_position["direction"] or signal == "Нет сигналов":
+            continue
+
+        if signal in ("LONG", "SHORT") and signal != current_position["direction"]:
+            result = calculate_trade_result(current_position["direction"], current_position["entry_price"], price)
+            if result is not None:
+                trades.append({
+                    "id": len(trades) + 1,
+                    "instrument": instrument,
+                    "title": title,
+                    "direction": current_position["direction"],
+                    "entry_time": current_position["entry_time"],
+                    "exit_time": candle_time,
+                    "entry_price": round(current_position["entry_price"], 8),
+                    "exit_price": round(price, 8),
+                    "exit_signal": signal,
+                    **result,
+                })
+            current_position = {
+                "instrument": instrument,
+                "title": title,
+                "direction": signal,
+                "entry_price": price,
+                "entry_time": candle_time,
+            }
+
+    return trades, current_position
 
 
 def evaluate_all_strategies(candles, instrument, title):
     rows = []
-
     for strategy in STRATEGIES:
         trades, open_position = build_strategy_history(candles, instrument, title, strategy["fn"])
         stats = calculate_statistics(trades)
         drawdown = calculate_max_drawdown(trades)
+        last_analysis = strategy["fn"](candles)
 
-        # Не прогноз: только сортировка по уже прошедшему тесту.
-        if stats["total"] >= 3:
-            score = stats["net"] - drawdown * 0.25 + stats["winrate"] * 10.0
+        if stats["total"] >= MIN_BACKTEST_TRADES:
+            # Прозрачный технический балл: чистая прибыль, winrate и просадка.
+            score = (stats["net"] / (1.0 + drawdown)) * 100 + stats["winrate"] * 2
+            eligible = True
+            reason = "Есть минимум 3 закрытые сделки; учитываются чистый результат, проходимость и просадка."
         else:
-            score = -1_000_000_000.0 + stats["total"] * 1000.0 + stats["net"]
+            score = -1e12 + stats["total"] * 1000 + stats["net"]
+            eligible = False
+            reason = f"Недостаточно закрытых сделок для надёжного сравнения: {stats['total']} из {MIN_BACKTEST_TRADES}."
 
         rows.append({
             "name": strategy["name"],
@@ -687,25 +610,36 @@ def evaluate_all_strategies(candles, instrument, title):
             "score": round(score, 4),
             "trades": trades,
             "open_position": open_position,
+            "current_signal": last_analysis.get("signal"),
+            "current_description": last_analysis.get("description", ""),
+            "eligible": eligible,
+            "reason": reason,
         })
 
-    rows.sort(key=lambda x: x["score"], reverse=True)
-    best = rows[0] if rows else None
-
-    if best is not None and best["statistics"]["total"] < 3:
+    eligible_rows = [r for r in rows if r["eligible"]]
+    if eligible_rows:
+        best = max(eligible_rows, key=lambda x: x["score"])
+        selection_reason = (
+            f"Выбрана по историческому тесту на {len(candles)} свечах: "
+            f"{best['statistics']['total']} сделок, проходимость {best['statistics']['winrate']}%, "
+            f"чистый результат {best['statistics']['net']:.2f} ₽, просадка {best['drawdown']:.2f} ₽."
+        )
+    else:
         best = max(rows, key=lambda x: (x["statistics"]["total"], x["statistics"]["net"]))
-
-    for row in rows:
-        row["selection_reason"] = make_selection_reason(
-            row["statistics"], row["drawdown"], row["statistics"]["total"], row is best
+        selection_reason = (
+            "Ни одна стратегия не набрала минимум 3 закрытые сделки. "
+            f"Временно выбрана стратегия с наибольшим количеством исторических сделок ({best['statistics']['total']}). "
+            "Это не означает, что она доказанно лучше остальных."
         )
 
-    return rows, best
+    for row in rows:
+        row["is_selected"] = row["key"] == best["key"]
+
+    rows.sort(key=lambda x: (x["is_selected"], x["score"]), reverse=True)
+    return rows, best, selection_reason
 
 
 def strategy_signal_from_best(candles, best):
-    if not best:
-        return no_signal()
     for strategy in STRATEGIES:
         if strategy["key"] == best["key"]:
             return strategy["fn"](candles)
@@ -713,13 +647,9 @@ def strategy_signal_from_best(candles, best):
 
 
 def analyze_strategy(candles):
-    _, best = evaluate_all_strategies(candles, "instrument", "instrument")
+    _, best, _ = evaluate_all_strategies(candles, "instrument", "instrument")
     return strategy_signal_from_best(candles, best)
 
-
-# ============================================================
-# HISTORY FILE
-# ============================================================
 
 def load_history():
     if not os.path.exists(HISTORY_FILE):
@@ -727,7 +657,7 @@ def load_history():
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, list) else []
+            return data if isinstance(data, list) else []
     except Exception as exc:
         log.warning("Ошибка чтения истории: %s", exc)
         return []
@@ -741,57 +671,51 @@ def save_history(history):
         log.error("Ошибка сохранения истории: %s", exc)
 
 
-# ============================================================
-# INSTRUMENT STATUS
-# ============================================================
-
-def empty_status(item_type, prefix, title, emoji):
+def base_result(kind, code, title, emoji):
     return {
-        "type": item_type,
-        "prefix": prefix,
-        "title": title,
-        "emoji": emoji,
-        "status": "Ошибка",
-        "message": "",
-        "ticker": "—",
-        "uid": "—",
-        "candles": 0,
+        "type": kind, "prefix": code, "title": title, "emoji": emoji,
+        "status": "Ошибка", "message": "", "ticker": "—",
+        "uid": "—", "candles": 0,
         "strategy": {"signal": "Нет сигналов", "direction": "—", "description": ""},
-        "selected_strategy": "—",
+        "selected_strategy": "—", "selection_reason": "—",
         "strategy_selection": [],
-        "history": [],
-        "statistics": calculate_statistics([]),
+        "history": [], "statistics": calculate_statistics([]),
         "open_position": None,
     }
 
 
+def analyze_instrument(result, instrument, instrument_code, title):
+    result["ticker"] = instrument["ticker"]
+    result["uid"] = instrument["instrument_uid"]
+
+    candles = normalize_candles(get_candles(instrument["instrument_uid"]))
+    result["candles"] = len(candles)
+
+    if not candles:
+        result["message"] = "Свечей 0 — API не вернул историю для этого инструмента."
+        return result
+
+    rankings, best, selection_reason = evaluate_all_strategies(candles, instrument_code, title)
+    result["strategy"] = strategy_signal_from_best(candles, best)
+    result["selected_strategy"] = best["name"]
+    result["selection_reason"] = selection_reason
+    result["strategy_selection"] = rankings
+    result["status"] = "OK"
+    result["message"] = f"Загружено {len(candles)} свечей. Все {len(STRATEGIES)} стратегий протестированы на одной и той же истории."
+    result["history"] = best["trades"]
+    result["open_position"] = best["open_position"]
+    result["statistics"] = best["statistics"]
+    return result
+
+
 def get_future_status(prefix, title, emoji):
-    result = empty_status("future", prefix, title, emoji)
+    result = base_result("future", prefix, title, emoji)
     try:
         future = find_active_future(prefix)
         if not future:
-            result["message"] = "Актуальный контракт не найден"
+            result["message"] = "Актуальный контракт не найден."
             return result
-
-        result["ticker"] = future["ticker"]
-        result["uid"] = future["instrument_uid"]
-        candles = normalize_candles(get_candles(future["instrument_uid"]))
-        result["candles"] = len(candles)
-
-        if not candles:
-            result["message"] = "Свечей 0"
-            return result
-
-        rankings, best = evaluate_all_strategies(candles, prefix, title)
-        result["strategy"] = strategy_signal_from_best(candles, best)
-        result["selected_strategy"] = best["name"] if best else "—"
-        result["strategy_selection"] = rankings
-        result["history"] = best["trades"] if best else []
-        result["open_position"] = best["open_position"] if best else None
-        result["statistics"] = best["statistics"] if best else calculate_statistics([])
-        result["status"] = "OK"
-        result["message"] = "Данные получены. Проверены все стратегии."
-        return result
+        return analyze_instrument(result, future, prefix, title)
     except Exception as exc:
         log.exception("Ошибка %s", title)
         result["message"] = str(exc)
@@ -799,123 +723,50 @@ def get_future_status(prefix, title, emoji):
 
 
 def get_share_status(stock):
-    result = empty_status("share", stock["code"], stock["title"], stock["emoji"])
+    result = base_result("share", stock["code"], stock["title"], stock["emoji"])
     try:
         share = find_share(stock)
         if not share:
-            result["message"] = "Акция не найдена"
+            result["message"] = "Акция не найдена."
             return result
-
-        result["ticker"] = share["ticker"]
-        result["uid"] = share["instrument_uid"]
-        candles = normalize_candles(get_candles(share["instrument_uid"]))
-        result["candles"] = len(candles)
-
-        if not candles:
-            result["message"] = "Свечей 0"
-            return result
-
-        rankings, best = evaluate_all_strategies(candles, stock["code"], stock["title"])
-        result["strategy"] = strategy_signal_from_best(candles, best)
-        result["selected_strategy"] = best["name"] if best else "—"
-        result["strategy_selection"] = rankings
-        result["history"] = best["trades"] if best else []
-        result["open_position"] = best["open_position"] if best else None
-        result["statistics"] = best["statistics"] if best else calculate_statistics([])
-        result["status"] = "OK"
-        result["message"] = "Данные получены. Проверены все стратегии."
-        return result
+        return analyze_instrument(result, share, stock["code"], stock["title"])
     except Exception as exc:
         log.exception("Ошибка акции %s", stock["title"])
         result["message"] = str(exc)
         return result
 
 
-# ============================================================
-# COLLECT DATA
-# ============================================================
-
-def make_bootstrap_data(message=None):
-    """Безопасный ответ для UI, даже если первый анализ ещё идёт."""
-    text_message = message or DATA_CACHE_ERROR
-    futures = [
-        empty_status("future", "CR", "Юань", "¥"),
-        empty_status("future", "GD", "Золото", "🥇"),
-        empty_status("future", "BR", "Нефть Brent", "🛢️"),
-    ]
-    shares = [empty_status("share", x["code"], x["title"], x["emoji"]) for x in STOCKS]
-    for item in futures + shares:
-        item["message"] = text_message
-    return {
-        "updated": datetime.now(timezone.utc).isoformat(),
-        "ready": False,
-        "server_ok": True,
-        "futures": futures,
-        "shares": shares,
-        "last_signal": {"title": "Нет сигналов", "signal": "—", "direction": "—", "description": ""},
-        "statistics": calculate_statistics([]),
-        "settings": {
-            "position_size": POSITION_SIZE_RUBLES,
-            "buy_commission": BUY_COMMISSION_PERCENT,
-            "sell_commission": SELL_COMMISSION_PERCENT,
-            "tax": TAX_PERCENT,
-            "candle_interval": "4 часа",
-            "history_days": HISTORY_DAYS,
-            "exit_rule": "Только противоположный сигнал",
-        },
-    }
-
-
 def collect_data():
-    """Полный анализ. Ошибка одного инструмента не ломает весь ответ."""
-    futures = []
-    for args in (("CR", "Юань", "¥"), ("GD", "Золото", "🥇"), ("BR", "Нефть Brent", "🛢️")):
-        try:
-            futures.append(get_future_status(*args))
-        except Exception as exc:
-            log.exception("Критическая ошибка фьючерса %s", args[1])
-            item = empty_status("future", args[0], args[1], args[2])
-            item["message"] = "%s: %s" % (type(exc).__name__, exc)
-            futures.append(item)
-
-    shares = []
-    for stock in STOCKS:
-        try:
-            shares.append(get_share_status(stock))
-        except Exception as exc:
-            log.exception("Критическая ошибка акции %s", stock["title"])
-            item = empty_status("share", stock["code"], stock["title"], stock["emoji"])
-            item["message"] = "%s: %s" % (type(exc).__name__, exc)
-            shares.append(item)
-
+    futures = [
+        get_future_status("CR", "Юань", "¥"),
+        get_future_status("GD", "Золото", "🥇"),
+        get_future_status("BR", "Нефть Brent", "🛢️"),
+    ]
+    shares = [get_share_status(stock) for stock in STOCKS]
     instruments = futures + shares
-
-    last_signal = {"title": "Нет сигналов", "signal": "—", "direction": "—", "description": ""}
-    for item in instruments:
-        signal = (item.get("strategy") or {}).get("signal")
-        if signal in ("LONG", "SHORT"):
-            last_signal = {
-                "title": item.get("title", "—"),
-                "signal": signal,
-                "direction": (item.get("strategy") or {}).get("direction", "—"),
-                "description": (item.get("strategy") or {}).get("description", ""),
-            }
-            break
 
     all_trades = []
     for item in instruments:
-        trades = item.get("history", [])
-        if isinstance(trades, list):
-            all_trades.extend(trades)
+        all_trades.extend(item.get("history", []))
 
     total_statistics = calculate_statistics(all_trades)
+
+    last_signal = {"title": "Нет сигналов", "signal": "—", "direction": "—", "description": ""}
+    for item in instruments:
+        signal = item["strategy"].get("signal")
+        if signal in ("LONG", "SHORT"):
+            last_signal = {
+                "title": item["title"], "signal": signal,
+                "direction": item["strategy"].get("direction", "—"),
+                "description": item["strategy"].get("description", ""),
+            }
+            break
 
     existing_history = load_history()
     existing_keys = {
         (t.get("instrument"), t.get("entry_time"), t.get("exit_time"), t.get("direction"))
-        for t in existing_history if isinstance(t, dict)
+        for t in existing_history
     }
-
     for trade in all_trades:
         key = (trade.get("instrument"), trade.get("entry_time"), trade.get("exit_time"), trade.get("direction"))
         if key not in existing_keys:
@@ -926,8 +777,6 @@ def collect_data():
 
     return {
         "updated": datetime.now(timezone.utc).isoformat(),
-        "ready": True,
-        "server_ok": True,
         "futures": futures,
         "shares": shares,
         "last_signal": last_signal,
@@ -938,267 +787,35 @@ def collect_data():
             "sell_commission": SELL_COMMISSION_PERCENT,
             "tax": TAX_PERCENT,
             "candle_interval": "4 часа",
-            "history_days": HISTORY_DAYS,
-            "exit_rule": "Только противоположный сигнал",
+            "history_days": HISTORY_HOURS // 24,
+            "exit_rule": "Противоположный сигнал",
+            "strategies_count": len(STRATEGIES),
         },
     }
 
 
-def refresh_cache():
-    global DATA_CACHE, DATA_CACHE_ERROR
-    try:
-        data = collect_data()
-        with CACHE_LOCK:
-            DATA_CACHE = data
-            DATA_CACHE_ERROR = ""
-        log.info("Кэш Markus Trade обновлён успешно")
-        return data
-    except Exception as exc:
-        DATA_CACHE_ERROR = "%s: %s" % (type(exc).__name__, exc)
-        log.exception("Критическая ошибка полного анализа")
-        return None
-
-
-# ============================================================
-# API ROUTES
-# ============================================================
-
 @app.route("/api/status")
 def api_status():
-    # ВАЖНО: endpoint всегда возвращает HTTP 200.
-    # Тяжёлый запрос к T-Bank выполняется в фоне, а Telegram получает кэш.
-    with CACHE_LOCK:
-        if DATA_CACHE is not None:
-            return jsonify(DATA_CACHE), 200
-        return jsonify(make_bootstrap_data(DATA_CACHE_ERROR)), 200
-
-
-@app.route("/api/health")
-def api_health():
-    token_ok = bool(get_token())
-    with CACHE_LOCK:
-        ready = DATA_CACHE is not None
-    return jsonify({
-        "server": "OK",
-        "token": token_ok,
-        "ready": ready,
-        "time": datetime.now(timezone.utc).isoformat(),
-    }), 200
+    try:
+        return jsonify(collect_data())
+    except Exception as exc:
+        log.exception("Ошибка /api/status")
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/history")
 def api_history():
-    try:
-        history = load_history()
-        return jsonify({"count": len(history), "history": history}), 200
-    except Exception as exc:
-        log.exception("Ошибка /api/history")
-        return jsonify({"count": 0, "history": [], "error": "%s: %s" % (type(exc).__name__, exc)}), 200
+    history = load_history()
+    return jsonify({"count": len(history), "history": history})
 
-
-# ============================================================
-# HTML — UTF-8, RUSSIAN TEXT SAFE
-# ============================================================
 
 HTML = r"""
-<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Markus Trade</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:linear-gradient(135deg,#07090d,#10141c);color:#fff;font-family:Arial,sans-serif;min-height:100vh}
-.container{width:95%;max-width:1400px;margin:0 auto;padding:25px 0 50px}
+.container{width:95%;max-width:1500px;margin:auto;padding:25px 0 50px}
 .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:25px}
-.logo{font-size:28px;font-weight:800;letter-spacing:1px}.logo span{color:#d7aa52}.updated{color:#8c96a8;font-size:13px}
-.section-title{margin:28px 0 14px;font-size:23px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
-.card{background:rgba(22,27,36,.95);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:20px;box-shadow:0 15px 50px rgba(0,0,0,.25)}
-.card h2{margin-top:0;font-size:20px}.status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;background:#193d2b;color:#66e29a}.error{background:#442020;color:#ff8585}
-.info{margin-top:15px;color:#aab3c2;font-size:13px;line-height:1.6}.signal{margin-top:15px;padding:14px;border-radius:14px;background:#111720;font-size:18px;font-weight:bold}.long{color:#52e58a}.short{color:#ff6666}.none{color:#9ca5b4}
-.strategy-box{margin-top:14px;background:#0d1219;border-radius:12px;padding:12px;font-size:12px;overflow-x:auto}.strategy-row{display:grid;grid-template-columns:1.4fr .65fr .55fr .9fr .9fr;gap:7px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);color:#b8c0cc}.strategy-row:last-child{border-bottom:0}.reason{grid-column:1/-1;color:#7f8a9d;font-size:11px;padding-top:2px}
-.statistics{margin-top:25px}.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{background:#111720;padding:16px;border-radius:14px}.stat-title{font-size:12px;color:#8f99aa;margin-bottom:7px}.stat-value{font-size:20px;font-weight:bold}
-.history{margin-top:25px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:900px}th,td{padding:11px;border-bottom:1px solid rgba(255,255,255,.07);text-align:left;font-size:13px}th{color:#9ca5b4;font-weight:normal}.positive{color:#52e58a;font-weight:bold}.negative{color:#ff6666;font-weight:bold}
-.settings{margin-top:20px;color:#858fa0;font-size:13px;line-height:1.7}button{margin-top:20px;border:none;border-radius:12px;padding:12px 20px;background:#d7aa52;color:#111;font-weight:bold;cursor:pointer}
-@media(max-width:900px){.grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:600px){.strategy-row{grid-template-columns:1fr 1fr}.strategy-row span:nth-child(n+3){font-size:11px}}
-</style>
-</head>
-<body>
-<div class="container">
-<div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">Загрузка...</div></div>
-<div class="section-title">📊 ФЬЮЧЕРСЫ — 4 ЧАСА</div><div class="grid" id="futures"></div>
-<div class="section-title">📈 АКЦИИ — 4 ЧАСА</div><div class="grid" id="shares"></div>
-<div class="card statistics"><h2>📊 Общая статистика</h2><div class="stats-grid" id="statistics"></div></div>
-<div class="card history"><h2>📜 История сделок</h2><div class="table-wrap" id="history"></div></div>
-<div class="card settings"><h2>⚙️ Настройки</h2>
-Размер виртуальной позиции: <b id="positionSize">—</b> ₽<br>
-Комиссия покупки: <b id="buyCommission">—</b>%<br>
-Комиссия продажи: <b id="sellCommission">—</b>%<br>
-Налог: <b id="tax">—</b>%<br>
-Таймфрейм: <b id="interval">—</b><br>
-История: <b id="historyDays">—</b> дней<br>
-Выход из сделки: <b id="exitRule">—</b><br>
-<button onclick="MarkusTradeLoad()">🔄 Обновить сейчас</button></div>
-</div>
-<script>
-/* Markus Trade: максимально совместимый JavaScript для Telegram/iOS WebView */
-(function(){
-  function byId(id){ return document.getElementById(id); }
-  function money(v){
-    var n=Number(v||0);
-    if(!isFinite(n)) n=0;
-    return n.toFixed(2);
-  }
-  function esc(v){
-    var s=(v===null||v===undefined)?"":String(v);
-    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");
-  }
-  function signalClass(s){
-    if(s==="LONG") return "long";
-    if(s==="SHORT") return "short";
-    return "none";
-  }
-  function renderInstrumentCard(item){
-    var strategy=item.strategy||{};
-    var signal=strategy.signal||"Нет сигналов";
-    var statusClass=item.status==="OK"?"status":"status error";
-    var stats=item.statistics||{};
-    var openPosition="Нет";
-    if(item.open_position){
-      openPosition=String(item.open_position.direction||"")+" от "+String(item.open_position.entry_price||"");
-    }
-    var rows="";
-    var list=item.strategy_selection||[];
-    var i,r,rs;
-    for(i=0;i<list.length;i++){
-      r=list[i]||{}; rs=r.statistics||{};
-      rows += '<div class="strategy-row">';
-      rows += '<span>'+(i+1)+'. '+esc(r.name)+'</span>';
-      rows += '<span>'+(rs.total||0)+' сделок</span>';
-      rows += '<span>'+(rs.winrate||0)+'%</span>';
-      rows += '<span class="'+(Number(rs.net||0)>=0?'positive':'negative')+'">'+money(rs.net)+' ₽</span>';
-      rows += '<span>DD '+money(r.drawdown)+' ₽</span>';
-      rows += '<div class="reason">'+esc(r.selection_reason||"")+'</div></div>';
-    }
-    return '<div class="card">'
-      +'<h2>'+esc(item.emoji)+' '+esc(item.title)+'</h2>'
-      +'<span class="'+statusClass+'">'+esc(item.status||"")+'</span>'
-      +'<div class="info">'+esc(item.message||"")+'</div>'
-      +'<div class="info">Тикер: <b>'+esc(item.ticker)+'</b><br>UID: <b>'+esc(item.uid)+'</b><br>4H-свечей: <b>'+String(item.candles||0)+'</b></div>'
-      +'<div class="signal '+signalClass(signal)+'">'+esc(signal)+'</div>'
-      +'<div class="info">'+esc(strategy.description||"")+'</div>'
-      +'<div class="info"><b>🤖 Выбрана стратегия: '+esc(item.selected_strategy||"—")+'</b><br>'
-      +'Закрытых сделок: <b>'+String(stats.total||0)+'</b><br>'
-      +'Проходимость: <b>'+String(stats.winrate||0)+'%</b><br>'
-      +'Прибыльных: <b>'+String(stats.profitable||0)+'</b><br>'
-      +'Убыточных: <b>'+String(stats.losing||0)+'</b><br>'
-      +'Чистый результат: <b>'+money(stats.net)+' ₽</b><br>'
-      +'Открытая позиция: <b>'+esc(openPosition)+'</b></div>'
-      +'<div class="strategy-box"><b>🔬 Проверка всех стратегий</b>'+rows+'</div>'
-      +'</div>';
-  }
-  function renderFutures(data){
-    var list=data.futures||[], html="", i;
-    for(i=0;i<list.length;i++) html+=renderInstrumentCard(list[i]);
-    byId("futures").innerHTML=html;
-  }
-  function renderShares(data){
-    var list=data.shares||[], html="", i;
-    for(i=0;i<list.length;i++) html+=renderInstrumentCard(list[i]);
-    byId("shares").innerHTML=html;
-  }
-  function renderStatistics(s){
-    s=s||{};
-    byId("statistics").innerHTML=
-      '<div class="stat"><div class="stat-title">Всего сделок</div><div class="stat-value">'+String(s.total||0)+'</div></div>'
-     +'<div class="stat"><div class="stat-title">Прибыльных</div><div class="stat-value">'+String(s.profitable||0)+'</div></div>'
-     +'<div class="stat"><div class="stat-title">Убыточных</div><div class="stat-value">'+String(s.losing||0)+'</div></div>'
-     +'<div class="stat"><div class="stat-title">Проходимость</div><div class="stat-value">'+String(s.winrate||0)+'%</div></div>'
-     +'<div class="stat"><div class="stat-title">До расходов</div><div class="stat-value">'+money(s.gross)+' ₽</div></div>'
-     +'<div class="stat"><div class="stat-title">Комиссии</div><div class="stat-value">'+money(s.commission)+' ₽</div></div>'
-     +'<div class="stat"><div class="stat-title">Налог</div><div class="stat-value">'+money(s.tax)+' ₽</div></div>'
-     +'<div class="stat"><div class="stat-title">ЧИСТЫЙ РЕЗУЛЬТАТ</div><div class="stat-value '+(Number(s.net||0)>=0?'positive':'negative')+'">'+money(s.net)+' ₽</div></div>';
-  }
-  function renderHistory(data){
-    var all=[], groups=[data.futures||[],data.shares||[]], i,j,x,t,html,c,net,commission;
-    for(i=0;i<groups.length;i++) for(j=0;j<groups[i].length;j++){
-      x=groups[i][j]; if(x.history) all=all.concat(x.history);
-    }
-    all.sort(function(a,b){ return String(b.exit_time||"").localeCompare(String(a.exit_time||"")); });
-    c=byId("history");
-    if(!all.length){ c.innerHTML="Пока закрытых сделок нет."; return; }
-    html='<table><thead><tr><th>Инструмент</th><th>Направление</th><th>Вход</th><th>Выход</th><th>Цена входа</th><th>Цена выхода</th><th>Результат</th><th>Комиссия</th><th>Налог</th><th>Чистый результат</th></tr></thead><tbody>';
-    for(i=0;i<all.length && i<100;i++){
-      t=all[i]||{}; net=Number(t.net_result||0); commission=Number(t.buy_commission||0)+Number(t.sell_commission||0);
-      html+='<tr><td>'+esc(t.title)+'</td><td>'+esc(t.direction)+'</td><td>'+esc(t.entry_time)+'</td><td>'+esc(t.exit_time)+'</td><td>'+esc(t.entry_price)+'</td><td>'+esc(t.exit_price)+'</td><td>'+money(t.gross_result)+' ₽</td><td>'+money(commission)+' ₽</td><td>'+money(t.tax)+' ₽</td><td class="'+(net>=0?'positive':'negative')+'">'+money(net)+' ₽</td></tr>';
-    }
-    html+='</tbody></table>'; c.innerHTML=html;
-  }
-  function showError(msg){ byId("updated").textContent="Ошибка загрузки: "+String(msg||"неизвестная ошибка"); }
-  function loadData(){
-    var xhr=new XMLHttpRequest();
-    xhr.open("GET","/api/status",true);
-    xhr.setRequestHeader("Cache-Control","no-cache");
-    xhr.onreadystatechange=function(){
-      var data,stamp;
-      if(xhr.readyState!==4) return;
-      if(xhr.status<200 || xhr.status>=300){ showError("HTTP "+xhr.status); return; }
-      try{
-        data=JSON.parse(xhr.responseText);
-        if(data.error){ showError(data.error); return; }
-        renderFutures(data); renderShares(data); renderStatistics(data.statistics); renderHistory(data);
-        stamp=data.updated?String(data.updated).replace("T"," ").replace("+00:00",""):"";
-        byId("updated").textContent="Обновлено: "+stamp;
-        byId("positionSize").textContent=money(data.settings&&data.settings.position_size);
-        byId("buyCommission").textContent=(data.settings&&data.settings.buy_commission)||0;
-        byId("sellCommission").textContent=(data.settings&&data.settings.sell_commission)||0;
-        byId("tax").textContent=(data.settings&&data.settings.tax)||0;
-        byId("interval").textContent=(data.settings&&data.settings.candle_interval)||"4 часа";
-        byId("historyDays").textContent=(data.settings&&data.settings.history_days)||0;
-        byId("exitRule").textContent=(data.settings&&data.settings.exit_rule)||"—";
-      }catch(e){ showError(e.message||e); }
-    };
-    xhr.onerror=function(){ showError("соединение с /api/status не установлено"); };
-    xhr.send(null);
-  }
-  window.MarkusTradeLoad=loadData;
-  loadData();
-  window.setInterval(loadData,60000);
-})();
-</script>
-</body></html>
-"""
-
-
-@app.route("/")
-def index():
-    return render_template_string(HTML)
-
-
-def background_monitor():
-    # Первый запуск и все последующие обновления идут вне HTTP-запроса.
-    while True:
-        refresh_cache()
-        time.sleep(UPDATE_SECONDS)
-
-
-if __name__ == "__main__":
-    token = get_token()
-    if not token:
-        log.warning("API-токен не найден. Добавь TINKOFF_TOKEN в переменные окружения.")
-    else:
-        log.info("API-токен найден.")
-
-    # Сразу создаём безопасный ответ для Telegram, чтобы /api/status никогда не был пустым.
-    DATA_CACHE = None
-    DATA_CACHE_ERROR = "Первый анализ запускается в фоне…"
-
-    monitor_thread = threading.Thread(target=background_monitor, daemon=True)
-    monitor_thread.start()
-
-    port = int(os.environ.get("PORT", "5000"))
-    log.info("%s запускается на порту %s", APP_NAME, port)
-    app.run(host="0.0.0.0", port=port, debug=False)
+.logo{font-size:28px;font-weight:800;letter-spacing:1px}
+.logo span{color:#
