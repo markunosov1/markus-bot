@@ -16,10 +16,6 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask, jsonify, render_template_string, request
 
-
-# ============================================================
-# UTF-8 ДЛЯ STDOUT/STDERR
-# ============================================================
 try:
     if sys.stdout.encoding is None or sys.stdout.encoding.lower() != "utf-8":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -28,33 +24,25 @@ try:
 except Exception:
     pass
 
-
-# ============================================================
-# КОНСТАНТЫ
-# ============================================================
 APP_NAME = "Markus Trade"
 API_BASE = "https://invest-public-api.tbank.ru/rest"
-
 FIND_INSTRUMENT_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
 FUTURES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
 SHARES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Shares"
 CANDLES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles"
 
 REQUEST_TIMEOUT = 30
-
 CANDLE_INTERVAL_DEFAULT = "CANDLE_INTERVAL_4_HOUR"
 HISTORY_DAYS_DEFAULT = 60
 
 CANDLE_INTERVALS = {
-    "CANDLE_INTERVAL_5_MIN": "5 минут",
-    "CANDLE_INTERVAL_15_MIN": "15 минут",
-    "CANDLE_INTERVAL_HOUR": "1 час",
-    "CANDLE_INTERVAL_4_HOUR": "4 часа",
-    "CANDLE_INTERVAL_DAY": "1 день",
+    "CANDLE_INTERVAL_5_MIN": "5 Ð¼Ð¸Ð½ÑÑ",
+    "CANDLE_INTERVAL_15_MIN": "15 Ð¼Ð¸Ð½ÑÑ",
+    "CANDLE_INTERVAL_HOUR": "1 ÑÐ°Ñ",
+    "CANDLE_INTERVAL_4_HOUR": "4 ÑÐ°ÑÐ°",
+    "CANDLE_INTERVAL_DAY": "1 Ð´ÐµÐ½Ñ",
 }
 
-# Максимальная глубина истории в днях для каждого интервала
-# (ограничения T-Банка по максимальному окну запроса)
 MAX_HISTORY_DAYS = {
     "CANDLE_INTERVAL_5_MIN": 14,
     "CANDLE_INTERVAL_15_MIN": 30,
@@ -63,7 +51,6 @@ MAX_HISTORY_DAYS = {
     "CANDLE_INTERVAL_DAY": 365,
 }
 
-# Значение по умолчанию для каждого интервала (авто-подстановка)
 DEFAULT_HISTORY_FOR_INTERVAL = {
     "CANDLE_INTERVAL_5_MIN": 7,
     "CANDLE_INTERVAL_15_MIN": 14,
@@ -79,7 +66,17 @@ SELL_COMMISSION_PERCENT = 0.10
 TAX_PERCENT = 13.0
 HISTORY_FILE = "trade_history.json"
 SETTINGS_FILE = "settings.json"
-MIN_BACKTEST_TRADES = 3
+
+MIN_BACKTEST_TRADES = 20
+MIN_WINRATE = 45.0
+MIN_PROFIT_DD_RATIO = 1.5
+MIN_NET_RESULT = 0.0
+
+SCREENING_INTERVALS = [
+    "CANDLE_INTERVAL_HOUR",
+    "CANDLE_INTERVAL_4_HOUR",
+    "CANDLE_INTERVAL_DAY",
+]
 
 DEFAULT_SETTINGS = {
     "candle_interval": CANDLE_INTERVAL_DEFAULT,
@@ -90,12 +87,9 @@ DEFAULT_SETTINGS = {
     "sl_atr_mult": 2.0,
     "tp_atr_mult": 4.0,
     "breakeven_trigger_atr": 2.0,
+    "screening_enabled": True,
 }
 
-
-# ============================================================
-# WARNINGS И ЛОГИРОВАНИЕ
-# ============================================================
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore")
 
@@ -106,10 +100,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("MARKUS_TRADE")
 
-
-# ============================================================
-# FLASK
-# ============================================================
 app = Flask(__name__)
 try:
     app.json.ensure_ascii = False
@@ -119,21 +109,16 @@ except Exception:
     except Exception:
         pass
 
-
-# ============================================================
-# БАЗА ДАННЫХ (PostgreSQL / Neon)
-# ============================================================
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
 def get_db_connection():
     if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL не задан в переменных окружения.")
+        raise RuntimeError("DATABASE_URL Ð½Ðµ Ð·Ð°Ð´Ð°Ð½ Ð² Ð¿ÐµÑÐµÐ¼ÐµÐ½Ð½ÑÑ Ð¾ÐºÑÑÐ¶ÐµÐ½Ð¸Ñ.")
     return psycopg2.connect(DATABASE_URL)
 
 
 def init_db():
-    """Создаёт таблицу для настроек, если её нет."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -143,11 +128,9 @@ def init_db():
                 );
             """)
             conn.commit()
-    log.info("Таблица settings готова.")
+    log.info("Ð¢Ð°Ð±Ð»Ð¸ÑÐ° settings Ð³Ð¾ÑÐ¾Ð²Ð°.")
 
-# ============================================================
-# РАБОТА С API
-# ============================================================
+
 def get_token():
     for name in ("TINKOFF_TOKEN", "TINVEST_TOKEN", "T_BANK_TOKEN", "API_TOKEN", "TOKEN"):
         value = os.environ.get(name)
@@ -159,8 +142,7 @@ def get_token():
 def api_post(url, payload):
     token = get_token()
     if not token:
-        raise RuntimeError("API-токен не найден. Проверь переменную TINKOFF_TOKEN.")
-
+        raise RuntimeError("API-ÑÐ¾ÐºÐµÐ½ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½. ÐÑÐ¾Ð²ÐµÑÑ Ð¿ÐµÑÐµÐ¼ÐµÐ½Ð½ÑÑ TINKOFF_TOKEN.")
     response = requests.post(
         url,
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
@@ -173,7 +155,7 @@ def api_post(url, payload):
     try:
         return response.json()
     except Exception as exc:
-        raise RuntimeError("T-Bank вернул ответ, который не удалось прочитать как JSON.") from exc
+        raise RuntimeError("T-Bank Ð²ÐµÑÐ½ÑÐ» Ð¾ÑÐ²ÐµÑ, ÐºÐ¾ÑÐ¾ÑÑÐ¹ Ð½Ðµ ÑÐ´Ð°Ð»Ð¾ÑÑ Ð¿ÑÐ¾ÑÐ¸ÑÐ°ÑÑ ÐºÐ°Ðº JSON.") from exc
 
 
 def get_string(obj, key):
@@ -212,9 +194,6 @@ def quotation_to_float(value):
         return 0.0
 
 
-# ============================================================
-# ФЬЮЧЕРСЫ
-# ============================================================
 def get_all_futures():
     for status in ("INSTRUMENT_STATUS_BASE", "INSTRUMENT_STATUS_ALL"):
         try:
@@ -223,7 +202,7 @@ def get_all_futures():
             if isinstance(futures, list):
                 return futures
         except Exception as exc:
-            log.warning("Ошибка Futures (%s): %s", status, exc)
+            log.warning("ÐÑÐ¸Ð±ÐºÐ° Futures (%s): %s", status, exc)
     return []
 
 
@@ -234,18 +213,18 @@ def matches_future(future, prefix):
         get_string(future, "basicAsset").upper(),
     ])
     keywords = {
-        "CR": ["CR", "CNY", "YUAN", "CNH", "ЮАН", "КИТАЙ"],
-        "GD": ["GD", "GOLD", "ЗОЛОТ"],
-        "BR": ["BR", "BRENT", "НЕФТ"],
+        "CR": ["CR", "CNY", "YUAN", "CNH", "Ð®ÐÐ", "ÐÐÐ¢ÐÐ"],
+        "GD": ["GD", "GOLD", "ÐÐÐÐÐ¢"],
+        "BR": ["BR", "BRENT", "ÐÐÐ¤Ð¢"],
     }.get(prefix.upper(), [prefix.upper()])
     return any(word in text for word in keywords)
 
 
 def find_active_future(prefix):
     queries = {
-        "CR": ["CR", "CNY", "юань", "CNY/RUB"],
-        "GD": ["GD", "GOLD", "золото"],
-        "BR": ["BR", "BRENT", "нефть"],
+        "CR": ["CR", "CNY", "ÑÐ°Ð½Ñ", "CNY/RUB"],
+        "GD": ["GD", "GOLD", "Ð·Ð¾Ð»Ð¾ÑÐ¾"],
+        "BR": ["BR", "BRENT", "Ð½ÐµÑÑÑ"],
     }.get(prefix, [prefix])
 
     candidates = []
@@ -307,13 +286,11 @@ def find_active_future(prefix):
     candidates.sort(key=lambda x: x.get("last_trade") or datetime.max.replace(tzinfo=timezone.utc))
     return candidates[0]
 
-# ============================================================
-# АКЦИИ
-# ============================================================
+
 STOCKS = [
-    {"code": "SBER", "title": "Сбербанк", "emoji": "🏦", "queries": ["SBER", "Сбербанк"]},
-    {"code": "ROSN", "title": "Роснефть", "emoji": "🛢️", "queries": ["ROSN", "Роснефть"]},
-    {"code": "GMKN", "title": "Норникель", "emoji": "⛏️", "queries": ["GMKN", "NORNICKEL", "Норникель"]},
+    {"code": "SBER", "title": "Ð¡Ð±ÐµÑÐ±Ð°Ð½Ðº", "emoji": "ð¦", "queries": ["SBER", "Ð¡Ð±ÐµÑÐ±Ð°Ð½Ðº"]},
+    {"code": "ROSN", "title": "Ð Ð¾ÑÐ½ÐµÑÑÑ", "emoji": "ð¢ï¸", "queries": ["ROSN", "Ð Ð¾ÑÐ½ÐµÑÑÑ"]},
+    {"code": "GMKN", "title": "ÐÐ¾ÑÐ½Ð¸ÐºÐµÐ»Ñ", "emoji": "âï¸", "queries": ["GMKN", "NORNICKEL", "ÐÐ¾ÑÐ½Ð¸ÐºÐµÐ»Ñ"]},
 ]
 
 
@@ -328,7 +305,7 @@ def find_share(stock):
                 "apiTradeAvailableFlag": True,
             })
         except Exception as exc:
-            log.warning("FindInstrument акции %s: %s", query, exc)
+            log.warning("FindInstrument Ð°ÐºÑÐ¸Ð¸ %s: %s", query, exc)
             continue
         instruments = data.get("instruments", [])
         if not isinstance(instruments, list):
@@ -366,9 +343,6 @@ def find_share(stock):
     return exact[0] if exact else candidates[0]
 
 
-# ============================================================
-# СВЕЧИ (с автоматическим ограничением глубины по таймфрейму)
-# ============================================================
 def get_candles(instrument_uid, settings=None):
     if settings is None:
         settings = load_settings()
@@ -377,7 +351,6 @@ def get_candles(instrument_uid, settings=None):
     if interval not in CANDLE_INTERVALS:
         interval = CANDLE_INTERVAL_DEFAULT
 
-    # Автоматически ограничиваем глубину истории в зависимости от таймфрейма
     max_days = MAX_HISTORY_DAYS.get(interval, 60)
     requested_days = int(settings.get("history_days", HISTORY_DAYS_DEFAULT))
     actual_days = max(1, min(requested_days, max_days))
@@ -418,9 +391,6 @@ def normalize_candles(candles):
     return result
 
 
-# ============================================================
-# ИНДИКАТОРЫ
-# ============================================================
 def ema(values, period):
     if len(values) < period:
         return None
@@ -450,9 +420,7 @@ def atr(candles, period=14):
     if not trs:
         return 0.0
     return sum(trs[-period:]) / period
-# ============================================================
-# СТРАТЕГИИ
-# ============================================================
+
 def no_signal(description="Сигнал не сформирован"):
     return {"signal": "Нет сигналов", "direction": "---", "description": description}
 
@@ -484,7 +452,6 @@ def user_strategy(candles):
     highs = [x["high"] for x in last]
     lows = [x["low"] for x in last]
     closes = [x["close"] for x in last]
-
     short_pattern = (
         highs[3] > highs[2] and highs[4] > highs[3] and highs[5] > highs[4]
         and closes[-1] < closes[-2] and closes[-2] < closes[-3]
@@ -495,10 +462,10 @@ def user_strategy(candles):
     )
     if short_pattern:
         return {"signal": "SHORT", "direction": "Вниз",
-                "description": "Авторская стратегия: растущие максимумы → подтверждённый разворот вниз"}
+                "description": "Авторская стратегия: растущие максимумы → разворот вниз"}
     if long_pattern:
         return {"signal": "LONG", "direction": "Вверх",
-                "description": "Авторская стратегия: снижающиеся минимумы → подтверждённый разворот вверх"}
+                "description": "Авторская стратегия: снижающиеся минимумы → разворот вверх"}
     return no_signal("Нет полного совпадения условий авторской стратегии")
 
 
@@ -527,10 +494,10 @@ def breakout_strategy(candles):
     low = min(x["low"] for x in prev)
     if last["close"] > high:
         return {"signal": "LONG", "direction": "Вверх",
-                "description": f"Закрытие пробило максимум 20 предыдущих свечей ({high:.2f})"}
+                "description": f"Закрытие пробило максимум 20 свечей ({high:.2f})"}
     if last["close"] < low:
         return {"signal": "SHORT", "direction": "Вниз",
-                "description": f"Закрытие пробило минимум 20 предыдущих свечей ({low:.2f})"}
+                "description": f"Закрытие пробило минимум 20 свечей ({low:.2f})"}
     return no_signal("Пробоя 20-свечного диапазона нет")
 
 
@@ -548,10 +515,10 @@ def rsi_strategy(candles):
     rsi = 100.0 if avg_loss == 0 else 100 - (100 / (1 + avg_gain / avg_loss))
     if rsi < 30 and closes[-1] > closes[-2]:
         return {"signal": "LONG", "direction": "Вверх",
-                "description": f"RSI перепродан ({rsi:.1f}) и цена разворачивается вверх"}
+                "description": f"RSI перепродан ({rsi:.1f}) и разворачивается вверх"}
     if rsi > 70 and closes[-1] < closes[-2]:
         return {"signal": "SHORT", "direction": "Вниз",
-                "description": f"RSI перекуплен ({rsi:.1f}) и цена разворачивается вниз"}
+                "description": f"RSI перекуплен ({rsi:.1f}) и разворачивается вниз"}
     return no_signal(f"RSI сейчас {rsi:.1f}; условия входа не выполнены")
 
 
@@ -587,10 +554,10 @@ def hammer_strategy(candles):
     uptrend = closes[0] < closes[1] < closes[2]
     if downtrend and body < total_range * 0.35 and lower_wick >= body * 2 and upper_wick < body * 0.5:
         return {"signal": "LONG", "direction": "Вверх",
-                "description": "Hammer: длинная нижняя тень после падения — покупатели откупили цену"}
+                "description": "Hammer: длинная нижняя тень после падения"}
     if uptrend and body < total_range * 0.35 and upper_wick >= body * 2 and lower_wick < body * 0.5:
         return {"signal": "SHORT", "direction": "Вниз",
-                "description": "Inverted Hammer: длинная верхняя тень после роста — продавцы вернули цену"}
+                "description": "Inverted Hammer: длинная верхняя тень после роста"}
     return no_signal("Hammer/Inverted Hammer не сформирован")
 
 
@@ -609,12 +576,12 @@ def engulfing_strategy(candles):
             and last_body > prev_body * 1.2
             and last["open"] <= prev["close"] and last["close"] >= prev["open"]):
         return {"signal": "LONG", "direction": "Вверх",
-                "description": "Bullish Engulfing: зелёная свеча полностью поглотила предыдущую красную"}
+                "description": "Bullish Engulfing"}
     if (prev_bullish and not last_bullish
             and last_body > prev_body * 1.2
             and last["open"] >= prev["close"] and last["close"] <= prev["open"]):
         return {"signal": "SHORT", "direction": "Вниз",
-                "description": "Bearish Engulfing: красная свеча полностью поглотила предыдущую зелёную"}
+                "description": "Bearish Engulfing"}
     return no_signal("Engulfing не сформирован")
 
 
@@ -633,11 +600,11 @@ def double_pattern_strategy(candles):
     if (abs(first_half_high - second_half_high) / first_half_high < tolerance
             and closes[-1] < min(highs[10:30]) * 0.99):
         return {"signal": "SHORT", "direction": "Вниз",
-                "description": f"Double Top: два максимума около {second_half_high:.2f} и пробой вниз"}
+                "description": f"Double Top около {second_half_high:.2f}"}
     if (abs(first_half_low - second_half_low) / first_half_low < tolerance
             and closes[-1] > max(lows[10:30]) * 1.01):
         return {"signal": "LONG", "direction": "Вверх",
-                "description": f"Double Bottom: два минимума около {second_half_low:.2f} и пробой вверх"}
+                "description": f"Double Bottom около {second_half_low:.2f}"}
     return no_signal("Double Top/Bottom не сформирован")
 
 
@@ -667,13 +634,13 @@ def supertrend_strategy(candles):
     prev_lower = prev_mid - multiplier * atr_val
     if prev["close"] < prev_lower and last["close"] > lower_band:
         return {"signal": "LONG", "direction": "Вверх",
-                "description": f"SuperTrend: цена пробила нижнюю полосу (ATR={atr_val:.2f}), тренд вверх"}
+                "description": f"SuperTrend пробил нижнюю полосу (ATR={atr_val:.2f})"}
     if prev["close"] > prev_upper and last["close"] < upper_band:
         return {"signal": "SHORT", "direction": "Вниз",
-                "description": f"SuperTrend: цена пробила верхнюю полосу (ATR={atr_val:.2f}), тренд вниз"}
+                "description": f"SuperTrend пробил верхнюю полосу (ATR={atr_val:.2f})"}
     if last["close"] > lower_band and last["close"] < upper_band:
-        return no_signal(f"SuperTrend в зоне неопределённости: {lower_band:.2f}–{upper_band:.2f}")
-    return no_signal("SuperTrend без чёткого сигнала")
+        return no_signal(f"SuperTrend в зоне: {lower_band:.2f}–{upper_band:.2f}")
+    return no_signal("SuperTrend без сигнала")
 
 
 STRATEGIES = [
@@ -689,9 +656,7 @@ STRATEGIES = [
     {"name": "SuperTrend", "key": "supertrend", "fn": supertrend_strategy, "min_bars": 15},
 ]
 
-# ============================================================
-# РАСЧЁТ РЕЗУЛЬТАТОВ
-# ============================================================
+
 def calculate_commission(amount, percent):
     return amount * percent / 100.0
 
@@ -731,14 +696,10 @@ def calculate_statistics(trades):
     tax = sum(t.get("tax", 0) for t in trades)
     net = sum(t.get("net_result", 0) for t in trades)
     return {
-        "total": total,
-        "profitable": profitable,
-        "losing": losing,
+        "total": total, "profitable": profitable, "losing": losing,
         "winrate": round(profitable / total * 100, 2),
-        "gross": round(gross, 2),
-        "commission": round(commission, 2),
-        "tax": round(tax, 2),
-        "net": round(net, 2),
+        "gross": round(gross, 2), "commission": round(commission, 2),
+        "tax": round(tax, 2), "net": round(net, 2),
     }
 
 
@@ -753,9 +714,6 @@ def calculate_max_drawdown(trades):
     return round(abs(max_dd), 2)
 
 
-# ============================================================
-# НАСТРОЙКИ (PostgreSQL)
-# ============================================================
 def load_settings():
     try:
         with get_db_connection() as conn:
@@ -810,9 +768,6 @@ def save_history(history):
         log.error("Ошибка сохранения истории: %s", exc)
 
 
-# ============================================================
-# ОТКРЫТИЕ ПОЗИЦИИ С РИСК-МЕНЕДЖМЕНТОМ
-# ============================================================
 def _open_position(direction, price, candle_time, window, use_sl, use_tp, sl_mult, tp_mult):
     atr_val = atr(window, 14) if (use_sl or use_tp) else 0.0
     stop_loss = None
@@ -829,19 +784,12 @@ def _open_position(direction, price, candle_time, window, use_sl, use_tp, sl_mul
             if use_tp:
                 take_profit = price - tp_mult * atr_val
     return {
-        "direction": direction,
-        "entry_price": price,
-        "entry_time": candle_time,
-        "stop_loss": stop_loss,
-        "take_profit": take_profit,
-        "atr_value": atr_val,
-        "breakeven_moved": False,
+        "direction": direction, "entry_price": price, "entry_time": candle_time,
+        "stop_loss": stop_loss, "take_profit": take_profit,
+        "atr_value": atr_val, "breakeven_moved": False,
     }
 
 
-# ============================================================
-# БЭКТЕСТ С РИСК-МЕНЕДЖМЕНТОМ
-# ============================================================
 def build_strategy_history(candles, instrument, title, strategy_fn, settings=None):
     if settings is None:
         settings = load_settings()
@@ -914,15 +862,10 @@ def build_strategy_history(candles, instrument, title, strategy_fn, settings=Non
                 if result is not None:
                     trades.append({
                         "id": len(trades) + 1,
-                        "instrument": instrument,
-                        "title": title,
-                        "direction": direction,
-                        "entry_time": current_position["entry_time"],
-                        "exit_time": candle_time,
-                        "entry_price": round(entry, 8),
-                        "exit_price": round(exit_price, 8),
-                        "exit_reason": exit_reason,
-                        "exit_signal": signal,
+                        "instrument": instrument, "title": title, "direction": direction,
+                        "entry_time": current_position["entry_time"], "exit_time": candle_time,
+                        "entry_price": round(entry, 8), "exit_price": round(exit_price, 8),
+                        "exit_reason": exit_reason, "exit_signal": signal,
                         **result,
                     })
                 current_position = None
@@ -964,32 +907,27 @@ def evaluate_all_strategies(candles, instrument, title, settings=None):
             reason = f"Недостаточно закрытых сделок: {stats['total']} из {MIN_BACKTEST_TRADES}."
 
         rows.append({
-            "name": strategy["name"],
-            "key": strategy["key"],
-            "statistics": stats,
-            "drawdown": drawdown,
-            "score": round(score, 4),
-            "trades": trades,
-            "open_position": open_position,
+            "name": strategy["name"], "key": strategy["key"],
+            "statistics": stats, "drawdown": drawdown, "score": round(score, 4),
+            "trades": trades, "open_position": open_position,
             "current_signal": last_analysis.get("signal"),
             "current_description": last_analysis.get("description", ""),
-            "eligible": eligible,
-            "reason": reason,
+            "eligible": eligible, "reason": reason,
         })
 
     eligible_rows = [r for r in rows if r["eligible"]]
     if eligible_rows:
         best = max(eligible_rows, key=lambda x: x["score"])
         selection_reason = (
-            f"Выбрана по историческому тесту на {len(candles)} свечах: "
-            f"{best['statistics']['total']} сделок, проходимость {best['statistics']['winrate']}%, "
-            f"чистый результат {best['statistics']['net']:.2f} ₽, просадка {best['drawdown']:.2f} ₽."
+            f"Выбрана на {len(candles)} свечах: "
+            f"{best['statistics']['total']} сделок, WR {best['statistics']['winrate']}%, "
+            f"net {best['statistics']['net']:.2f} ₽, DD {best['drawdown']:.2f} ₽."
         )
     else:
         best = max(rows, key=lambda x: (x["statistics"]["total"], x["statistics"]["net"]))
         selection_reason = (
             "Ни одна стратегия не набрала минимум 3 закрытые сделки. "
-            f"Временно выбрана стратегия с наибольшим количеством сделок ({best['statistics']['total']})."
+            f"Временно выбрана с наибольшим количеством сделок ({best['statistics']['total']})."
         )
 
     for row in rows:
@@ -1005,9 +943,6 @@ def strategy_signal_from_best(candles, best):
     return no_signal()
 
 
-# ============================================================
-# АНАЛИЗ ИНСТРУМЕНТА
-# ============================================================
 def base_result(kind, code, title, emoji):
     return {
         "type": kind, "prefix": code, "title": title, "emoji": emoji,
@@ -1025,9 +960,8 @@ def analyze_instrument(result, instrument, instrument_code, title, settings):
     candles = normalize_candles(get_candles(instrument["instrument_uid"], settings))
     result["candles"] = len(candles)
     if not candles:
-        result["message"] = "Свечей 0 — API не вернул историю для этого инструмента."
+        result["message"] = "Свечей 0 — API не вернул историю."
         return result
-
     rankings, best, selection_reason = evaluate_all_strategies(
         candles, instrument_code, title, settings
     )
@@ -1070,14 +1004,160 @@ def get_share_status(stock, settings):
         result["message"] = str(exc)
         return result
 
+
 # ============================================================
-# СБОР ДАННЫХ
+# АВТОМАТИЧЕСКИЙ СКРИНИНГ
 # ============================================================
+_SCREENING_CACHE = {"data": None, "updated_at": None}
+_SCREENING_LOCK = threading.Lock()
+
+
+def check_strategy_criteria(stats, drawdown):
+    reasons = []
+    ok = True
+    if stats["total"] < MIN_BACKTEST_TRADES:
+        ok = False
+        reasons.append(f"мало сделок ({stats['total']}<{MIN_BACKTEST_TRADES})")
+    if stats["winrate"] < MIN_WINRATE:
+        ok = False
+        reasons.append(f"низкий WR ({stats['winrate']}%<{MIN_WINRATE}%)")
+    if stats["net"] <= MIN_NET_RESULT:
+        ok = False
+        reasons.append(f"net <= 0 ({stats['net']:.2f} ₽)")
+    if drawdown <= 0:
+        ok = False
+        reasons.append("нулевая просадка")
+    else:
+        ratio = stats["net"] / drawdown
+        if ratio < MIN_PROFIT_DD_RATIO:
+            ok = False
+            reasons.append(f"P/DD {ratio:.2f} < {MIN_PROFIT_DD_RATIO}")
+    if ok:
+        ratio = stats["net"] / max(drawdown, 1)
+        return True, f"P/DD={ratio:.2f}, WR={stats['winrate']}%"
+    return False, "; ".join(reasons)
+
+
+def screen_strategies_for_instrument(instrument, title, instrument_code):
+    passed = []
+    rejected = []
+    for interval in SCREENING_INTERVALS:
+        interval_label = CANDLE_INTERVALS.get(interval, interval)
+        max_days = MAX_HISTORY_DAYS.get(interval, 60)
+        temp_settings = dict(DEFAULT_SETTINGS)
+        temp_settings["candle_interval"] = interval
+        temp_settings["history_days"] = max_days
+
+        candles_raw = get_candles(instrument["instrument_uid"], temp_settings)
+        candles = normalize_candles(candles_raw)
+        if len(candles) < 40:
+            rejected.append({
+                "instrument": title, "ticker": instrument.get("ticker", "—"),
+                "interval": interval_label, "interval_key": interval,
+                "strategy": "—", "strategy_key": "—",
+                "trades": 0, "winrate": 0, "net": 0, "drawdown": 0, "ratio": 0,
+                "candles": len(candles),
+                "reason": f"мало свечей ({len(candles)})",
+            })
+            continue
+
+        for strategy in STRATEGIES:
+            trades, _ = build_strategy_history(
+                candles, instrument_code, title, strategy["fn"], temp_settings
+            )
+            stats = calculate_statistics(trades)
+            dd = calculate_max_drawdown(trades)
+            ok, reason = check_strategy_criteria(stats, dd)
+            row = {
+                "instrument": title, "ticker": instrument.get("ticker", "—"),
+                "interval": interval_label, "interval_key": interval,
+                "strategy": strategy["name"], "strategy_key": strategy["key"],
+                "trades": stats["total"], "winrate": stats["winrate"],
+                "net": stats["net"], "drawdown": dd,
+                "ratio": round(stats["net"] / max(dd, 1), 2),
+                "candles": len(candles), "reason": reason,
+            }
+            if ok:
+                passed.append(row)
+            else:
+                rejected.append(row)
+    return passed, rejected
+
+
+def run_full_screening():
+    log.info("=" * 60)
+    log.info("ЗАПУСК ПОЛНОГО СКРИНИНГА СТРАТЕГИЙ")
+    log.info("=" * 60)
+    all_passed = []
+    all_rejected = []
+    instruments_checked = []
+
+    for prefix, title, emoji in [("CR", "Юань", "¥"), ("GD", "Золото", "🥇"), ("BR", "Нефть Brent", "🛢️")]:
+        try:
+            instrument = find_active_future(prefix)
+            if not instrument:
+                log.warning("Инструмент %s не найден", title)
+                continue
+            instruments_checked.append(title)
+            log.info("Скрининг %s (%s)...", title, instrument.get("ticker"))
+            p, r = screen_strategies_for_instrument(instrument, title, prefix)
+            all_passed.extend(p)
+            all_rejected.extend(r)
+        except Exception as exc:
+            log.exception("Ошибка скрининга %s: %s", title, exc)
+
+    for stock in STOCKS:
+        try:
+            instrument = find_share(stock)
+            if not instrument:
+                log.warning("Акция %s не найдена", stock["title"])
+                continue
+            instruments_checked.append(stock["title"])
+            log.info("Скрининг %s (%s)...", stock["title"], instrument.get("ticker"))
+            p, r = screen_strategies_for_instrument(instrument, stock["title"], stock["code"])
+            all_passed.extend(p)
+            all_rejected.extend(r)
+        except Exception as exc:
+            log.exception("Ошибка скрининга %s: %s", stock["title"], exc)
+
+    all_passed.sort(key=lambda x: x["ratio"], reverse=True)
+    all_rejected.sort(key=lambda x: x.get("ratio", -999), reverse=True)
+
+    log.info("=" * 60)
+    log.info("ИТОГИ СКРИНИНГА: прошло %d, отклонено %d", len(all_passed), len(all_rejected))
+    for row in all_passed[:10]:
+        log.info("OK %s | %s | %s | сделок=%d, WR=%.1f%%, net=%.0f, DD=%.0f, P/DD=%.2f",
+                 row["instrument"], row["interval"], row["strategy"],
+                 row["trades"], row["winrate"], row["net"], row["drawdown"], row["ratio"])
+    log.info("=" * 60)
+
+    return {
+        "passed": all_passed, "rejected": all_rejected[:200],
+        "instruments_checked": instruments_checked,
+        "passed_count": len(all_passed), "rejected_count": len(all_rejected),
+    }
+
+
+def get_screening_cached(max_age_seconds=3600):
+    with _SCREENING_LOCK:
+        now = datetime.now(timezone.utc)
+        updated = _SCREENING_CACHE.get("updated_at")
+        if updated and (now - updated).total_seconds() < max_age_seconds:
+            return _SCREENING_CACHE["data"]
+        try:
+            data = run_full_screening()
+            _SCREENING_CACHE["data"] = data
+            _SCREENING_CACHE["updated_at"] = now
+            return data
+        except Exception as exc:
+            log.exception("Ошибка скрининга: %s", exc)
+            return _SCREENING_CACHE["data"] or {
+                "passed": [], "rejected": [], "instruments_checked": [],
+                "passed_count": 0, "rejected_count": 0,
+            }
 def collect_data():
     settings = load_settings()
-    interval_name = CANDLE_INTERVALS.get(
-        settings.get("candle_interval"), "4 часа"
-    )
+    interval_name = CANDLE_INTERVALS.get(settings.get("candle_interval"), "4 часа")
 
     futures = [
         get_future_status("CR", "Юань", "¥", settings),
@@ -1118,17 +1198,13 @@ def collect_data():
 
     return {
         "updated": datetime.now(timezone.utc).isoformat(),
-        "futures": futures,
-        "shares": shares,
-        "last_signal": last_signal,
-        "statistics": total_statistics,
-        "risk_settings": settings,
+        "futures": futures, "shares": shares, "last_signal": last_signal,
+        "statistics": total_statistics, "risk_settings": settings,
         "settings": {
             "position_size": POSITION_SIZE_RUBLES,
             "buy_commission": BUY_COMMISSION_PERCENT,
             "sell_commission": SELL_COMMISSION_PERCENT,
-            "tax": TAX_PERCENT,
-            "candle_interval": interval_name,
+            "tax": TAX_PERCENT, "candle_interval": interval_name,
             "history_days": settings.get("history_days", HISTORY_DAYS_DEFAULT),
             "exit_rule": "Стоп-лосс / Тейк-профит / Противоположный сигнал",
             "strategies_count": len(STRATEGIES),
@@ -1136,9 +1212,6 @@ def collect_data():
     }
 
 
-# ============================================================
-# API-РОУТЫ
-# ============================================================
 @app.route("/api/status")
 def api_status():
     try:
@@ -1154,6 +1227,24 @@ def api_history():
     return jsonify({"count": len(history), "history": history})
 
 
+@app.route("/api/screening")
+def api_screening():
+    try:
+        force = request.args.get("force", "").lower() in ("1", "true", "yes")
+        if force:
+            with _SCREENING_LOCK:
+                _SCREENING_CACHE["updated_at"] = None
+        data = get_screening_cached()
+        updated = _SCREENING_CACHE["updated_at"]
+        return jsonify({
+            "updated_at": updated.isoformat() if updated else None,
+            **data,
+        })
+    except Exception as exc:
+        log.exception("Ошибка /api/screening")
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
     if request.method == "GET":
@@ -1166,7 +1257,6 @@ def api_settings():
                 current[key] = data[key]
         if current.get("candle_interval") not in CANDLE_INTERVALS:
             current["candle_interval"] = CANDLE_INTERVAL_DEFAULT
-        # Автоматическое ограничение глубины для выбранного интервала
         interval_now = current.get("candle_interval", CANDLE_INTERVAL_DEFAULT)
         max_days = MAX_HISTORY_DAYS.get(interval_now, 60)
         try:
@@ -1181,10 +1271,8 @@ def api_settings():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-# ============================================================
-# ФОНОВЫЙ МОНИТОРИНГ
-# ============================================================
 def background_monitor():
+    first_run = True
     while True:
         try:
             data = collect_data()
@@ -1198,21 +1286,29 @@ def background_monitor():
                      stats["total"], stats["winrate"], stats["net"])
         except Exception as exc:
             log.exception("Ошибка фонового мониторинга: %s", exc)
+
+        try:
+            with _SCREENING_LOCK:
+                now = datetime.now(timezone.utc)
+                updated = _SCREENING_CACHE.get("updated_at")
+                need_screening = first_run or not updated or \
+                                 (now - updated).total_seconds() > 3600
+            if need_screening:
+                log.info("Пересчёт скрининга стратегий...")
+                get_screening_cached(max_age_seconds=0)
+                first_run = False
+        except Exception as exc:
+            log.exception("Ошибка пересчёта скрининга: %s", exc)
+
         time.sleep(UPDATE_SECONDS)
 
 
-# ============================================================
-# ИНИЦИАЛИЗАЦИЯ БД ПРИ СТАРТЕ (для gunicorn)
-# ============================================================
 try:
     init_db()
 except Exception as _exc:
     log.error("Не удалось инициализировать БД при старте: %s", _exc)
 
 
-# ============================================================
-# HTML
-# ============================================================
 HTML = r"""
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Markus Trade</title>
@@ -1253,15 +1349,26 @@ th{color:#9ca5b4;font-weight:normal}
 .settings{margin-top:20px;color:#858fa0;font-size:13px;line-height:1.7}
 button{margin-top:10px;margin-right:6px;border:none;border-radius:12px;padding:10px 16px;background:#d7aa52;color:#111;font-weight:bold;cursor:pointer}
 input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color:#fff;border:1px solid rgba(255,255,255,.15)}
+details summary{cursor:pointer;color:#d7aa52;font-weight:bold;margin-top:20px;padding:8px 0}
 @media(max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
 @media(max-width:700px){.grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.header{align-items:flex-start;gap:10px;flex-direction:column}}
 </style></head><body><div class="container">
 <div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">Загрузка...</div></div>
 
+<div class="card" id="screeningCard">
+<h2>🔍 Автоматический скрининг стратегий</h2>
+<div class="info" id="screeningInfo">Анализ запущен. Первый расчёт может занять 1-3 минуты...</div>
+<div class="table-wrap" id="screeningPassed"></div>
+<details>
+<summary>❌ Отклонённые стратегии (нажмите чтобы развернуть)</summary>
+<div class="table-wrap" id="screeningRejected" style="margin-top:12px"></div>
+</details>
+</div>
+
 <div class="card" id="riskCard">
 <h2>⚙️ Управление бэктестом</h2>
 <div class="info">
-<b>Таймфрейм:</b><br>
+<b>Таймфрейм (для карточек ниже):</b><br>
 <select id="intervalSelect" style="width:100%" onchange="onIntervalChange()">
 <option value="CANDLE_INTERVAL_5_MIN">5 минут</option>
 <option value="CANDLE_INTERVAL_15_MIN">15 минут</option>
@@ -1308,44 +1415,24 @@ input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color
 function money(v){return Number(v||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function signalClass(s){return s==='LONG'?'long':s==='SHORT'?'short':'none'}
 
-const MAX_HISTORY_DAYS_JS = {
-  "CANDLE_INTERVAL_5_MIN": 14,
-  "CANDLE_INTERVAL_15_MIN": 30,
-  "CANDLE_INTERVAL_HOUR": 90,
-  "CANDLE_INTERVAL_4_HOUR": 180,
-  "CANDLE_INTERVAL_DAY": 365,
-};
-const DEFAULT_HISTORY_FOR_INTERVAL_JS = {
-  "CANDLE_INTERVAL_5_MIN": 7,
-  "CANDLE_INTERVAL_15_MIN": 14,
-  "CANDLE_INTERVAL_HOUR": 60,
-  "CANDLE_INTERVAL_4_HOUR": 60,
-  "CANDLE_INTERVAL_DAY": 60,
-};
-const INTERVAL_LABELS = {
-  "CANDLE_INTERVAL_5_MIN": "5 минут",
-  "CANDLE_INTERVAL_15_MIN": "15 минут",
-  "CANDLE_INTERVAL_HOUR": "1 час",
-  "CANDLE_INTERVAL_4_HOUR": "4 часа",
-  "CANDLE_INTERVAL_DAY": "1 день",
-};
+const MAX_HISTORY_DAYS_JS = {"CANDLE_INTERVAL_5_MIN":14,"CANDLE_INTERVAL_15_MIN":30,"CANDLE_INTERVAL_HOUR":90,"CANDLE_INTERVAL_4_HOUR":180,"CANDLE_INTERVAL_DAY":365};
+const DEFAULT_HISTORY_FOR_INTERVAL_JS = {"CANDLE_INTERVAL_5_MIN":7,"CANDLE_INTERVAL_15_MIN":14,"CANDLE_INTERVAL_HOUR":60,"CANDLE_INTERVAL_4_HOUR":60,"CANDLE_INTERVAL_DAY":60};
+const INTERVAL_LABELS = {"CANDLE_INTERVAL_5_MIN":"5 минут","CANDLE_INTERVAL_15_MIN":"15 минут","CANDLE_INTERVAL_HOUR":"1 час","CANDLE_INTERVAL_4_HOUR":"4 часа","CANDLE_INTERVAL_DAY":"1 день"};
 
-function updateHistoryHint(interval) {
-  const hint = document.getElementById('historyHint');
-  const maxDays = MAX_HISTORY_DAYS_JS[interval] || 60;
-  hint.textContent = 'Максимум для ' + (INTERVAL_LABELS[interval] || interval) + ': ' + maxDays + ' дней';
+function updateHistoryHint(interval){
+  const hint=document.getElementById('historyHint');
+  const maxDays=MAX_HISTORY_DAYS_JS[interval]||60;
+  hint.textContent='Максимум для '+(INTERVAL_LABELS[interval]||interval)+': '+maxDays+' дней';
 }
-
-function onIntervalChange() {
-  const interval = document.getElementById('intervalSelect').value;
-  const hdInput = document.getElementById('historyDaysInput');
-  const maxDays = MAX_HISTORY_DAYS_JS[interval] || 60;
-  const defDays = DEFAULT_HISTORY_FOR_INTERVAL_JS[interval] || 60;
-  hdInput.max = maxDays;
-  hdInput.value = defDays;
+function onIntervalChange(){
+  const interval=document.getElementById('intervalSelect').value;
+  const hdInput=document.getElementById('historyDaysInput');
+  const maxDays=MAX_HISTORY_DAYS_JS[interval]||60;
+  const defDays=DEFAULT_HISTORY_FOR_INTERVAL_JS[interval]||60;
+  hdInput.max=maxDays;
+  hdInput.value=defDays;
   updateHistoryHint(interval);
 }
-
 function renderInstrumentCard(item){
   const signal=item.strategy.signal;
   const stats=item.statistics||{};
@@ -1373,43 +1460,67 @@ function renderHistory(data){
   c.innerHTML=h+'</tbody></table>';
 }
 function renderRiskSettings(s){
-  const sel = document.getElementById('intervalSelect');
-  if (sel && s.candle_interval) sel.value = s.candle_interval;
-  const intervalNow = s.candle_interval || 'CANDLE_INTERVAL_4_HOUR';
-  const hd = document.getElementById('historyDaysInput');
-  hd.max = MAX_HISTORY_DAYS_JS[intervalNow] || 60;
-  if (s.history_days) hd.value = s.history_days;
+  const sel=document.getElementById('intervalSelect');
+  if(sel && s.candle_interval) sel.value=s.candle_interval;
+  const intervalNow=s.candle_interval||'CANDLE_INTERVAL_4_HOUR';
+  const hd=document.getElementById('historyDaysInput');
+  hd.max=MAX_HISTORY_DAYS_JS[intervalNow]||60;
+  if(s.history_days) hd.value=s.history_days;
   updateHistoryHint(intervalNow);
-  document.getElementById('useSL').checked = !!s.use_stop_loss;
-  document.getElementById('slMult').value = s.sl_atr_mult;
-  document.getElementById('useTP').checked = !!s.use_take_profit;
-  document.getElementById('tpMult').value = s.tp_atr_mult;
-  document.getElementById('useBE').checked = !!s.use_breakeven;
-  document.getElementById('beTrig').value = s.breakeven_trigger_atr;
+  document.getElementById('useSL').checked=!!s.use_stop_loss;
+  document.getElementById('slMult').value=s.sl_atr_mult;
+  document.getElementById('useTP').checked=!!s.use_take_profit;
+  document.getElementById('tpMult').value=s.tp_atr_mult;
+  document.getElementById('useBE').checked=!!s.use_breakeven;
+  document.getElementById('beTrig').value=s.breakeven_trigger_atr;
+}
+function renderScreening(data){
+  const info=document.getElementById('screeningInfo');
+  const passedEl=document.getElementById('screeningPassed');
+  const rejectedEl=document.getElementById('screeningRejected');
+  if(!data || data.error){
+    info.innerHTML='Ошибка: '+(data && data.error ? data.error : 'нет данных');
+    return;
+  }
+  const passedCount=data.passed_count||0;
+  const rejectedCount=data.rejected_count||0;
+  const updatedAt=data.updated_at?new Date(data.updated_at).toLocaleString('ru-RU'):'—';
+  if(passedCount===0){
+    info.innerHTML=`<b style="color:#ff6666">⚠️ Ни одна стратегия не прошла фильтр</b><br>Проверено ${rejectedCount} комбинаций (инструмент × таймфрейм × стратегия).<br>Критерии: ≥${20} сделок, WR ≥45%, чистый плюс, P/DD ≥1.5.<br><span style="color:#8f99aa;font-size:12px">Обновлено: ${updatedAt}</span>`;
+    passedEl.innerHTML='';
+  }else{
+    info.innerHTML=`<b style="color:#52e58a">✅ Найдено рабочих стратегий: ${passedCount}</b> (отклонено: ${rejectedCount})<br><span style="color:#8f99aa;font-size:12px">Обновлено: ${updatedAt}. Топ-10 по P/DD:</span>`;
+    let h='<table><thead><tr><th>Инструмент</th><th>Таймфрейм</th><th>Стратегия</th><th>Сделок</th><th>Winrate</th><th>Чистый</th><th>DD</th><th>P/DD</th></tr></thead><tbody>';
+    data.passed.slice(0,10).forEach(r=>{
+      h+=`<tr><td>${r.instrument}</td><td>${r.interval}</td><td>${r.strategy}</td><td>${r.trades}</td><td>${r.winrate}%</td><td class="positive">${money(r.net)} ₽</td><td>${money(r.drawdown)} ₽</td><td class="positive">${r.ratio}</td></tr>`;
+    });
+    passedEl.innerHTML=h+'</tbody></table>';
+  }
+  if(rejectedEl && data.rejected && data.rejected.length){
+    let h='<table><thead><tr><th>Инструмент</th><th>Таймфрейм</th><th>Стратегия</th><th>Сделок</th><th>Winrate</th><th>Чистый</th><th>Причина</th></tr></thead><tbody>';
+    data.rejected.slice(0,60).forEach(r=>{
+      h+=`<tr><td>${r.instrument}</td><td>${r.interval}</td><td>${r.strategy}</td><td>${r.trades||0}</td><td>${r.winrate||0}%</td><td class="${(r.net||0)>=0?'positive':'negative'}">${money(r.net||0)} ₽</td><td style="color:#ff8585">${r.reason||'—'}</td></tr>`;
+    });
+    rejectedEl.innerHTML=h+'</tbody></table>';
+  }else if(rejectedEl){
+    rejectedEl.innerHTML='Нет данных.';
+  }
 }
 async function saveRiskSettings(){
-  const payload = {
-    candle_interval: document.getElementById('intervalSelect').value,
-    history_days: parseInt(document.getElementById('historyDaysInput').value) || 60,
-    use_stop_loss: document.getElementById('useSL').checked,
-    sl_atr_mult: parseFloat(document.getElementById('slMult').value) || 2.0,
-    use_take_profit: document.getElementById('useTP').checked,
-    tp_atr_mult: parseFloat(document.getElementById('tpMult').value) || 4.0,
-    use_breakeven: document.getElementById('useBE').checked,
-    breakeven_trigger_atr: parseFloat(document.getElementById('beTrig').value) || 2.0,
+  const payload={
+    candle_interval:document.getElementById('intervalSelect').value,
+    history_days:parseInt(document.getElementById('historyDaysInput').value)||60,
+    use_stop_loss:document.getElementById('useSL').checked,
+    sl_atr_mult:parseFloat(document.getElementById('slMult').value)||2.0,
+    use_take_profit:document.getElementById('useTP').checked,
+    tp_atr_mult:parseFloat(document.getElementById('tpMult').value)||4.0,
+    use_breakeven:document.getElementById('useBE').checked,
+    breakeven_trigger_atr:parseFloat(document.getElementById('beTrig').value)||2.0,
   };
-  const r = await fetch('/api/settings', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload)
-  });
-  const res = await r.json();
-  if (res.ok) {
-    alert('Настройки сохранены. Пересчитываю...');
-    loadData();
-  } else {
-    alert('Ошибка: ' + res.error);
-  }
+  const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const res=await r.json();
+  if(res.ok){alert('Настройки сохранены. Пересчитываю...');loadData();}
+  else{alert('Ошибка: '+res.error);}
 }
 async function loadData(){
   try{
@@ -1417,7 +1528,7 @@ async function loadData(){
     const data=await response.json();
     if(data.error){console.error(data.error);return}
     renderFutures(data);renderShares(data);renderStatistics(data.statistics);renderHistory(data);
-    if (data.risk_settings) renderRiskSettings(data.risk_settings);
+    if(data.risk_settings) renderRiskSettings(data.risk_settings);
     document.getElementById('updated').textContent='Обновлено: '+new Date(data.updated).toLocaleString('ru-RU');
     document.getElementById('positionSize').textContent=money(data.settings.position_size);
     document.getElementById('buyCommission').textContent=data.settings.buy_commission;
@@ -1429,7 +1540,17 @@ async function loadData(){
     document.getElementById('exitRule').textContent=data.settings.exit_rule;
   }catch(e){console.error('Ошибка загрузки:',e)}
 }
-loadData();setInterval(loadData,60000);
+async function loadScreening(){
+  try{
+    const r=await fetch('/api/screening');
+    const data=await r.json();
+    renderScreening(data);
+  }catch(e){console.error('Ошибка загрузки скрининга:',e)}
+}
+loadData();
+loadScreening();
+setInterval(loadData,60000);
+setInterval(loadScreening,300000);
 </script></body></html>
 """
 
@@ -1439,24 +1560,16 @@ def index():
     return render_template_string(HTML)
 
 
-# ============================================================
-# ЗАПУСК
-# ============================================================
 if __name__ == "__main__":
     if not get_token():
         log.error("ВНИМАНИЕ: API-токен не найден!")
     else:
         log.info("API-токен найден.")
-
     try:
         init_db()
     except Exception as exc:
         log.error("Ошибка инициализации БД: %s", exc)
-
     threading.Thread(target=background_monitor, daemon=True).start()
     port = int(os.environ.get("PORT", "5000"))
     log.info("MARKUS TRADE запускается на порту %s", port)
     app.run(host="0.0.0.0", port=port, debug=False)
-
-
-
