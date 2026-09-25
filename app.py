@@ -51,6 +51,13 @@ def force_utf8(response):
         response.headers["Content-Type"] = "text/html; charset=utf-8"
     return response
 
+# Кэш данных: /api/status больше не выполняет долгий анализ внутри HTTP-запроса.
+# Это устраняет HTTP 500/таймауты Telegram WebView, если T-Bank отвечает долго.
+CACHE_LOCK = threading.Lock()
+DATA_CACHE = None
+DATA_CACHE_ERROR = "Анализ ещё не завершён. Нажмите «Обновить сейчас» или подождите первый запуск."
+
+
 # ============================================================
 # TOKEN / API
 # ============================================================
@@ -295,15 +302,16 @@ def find_share(stock):
 # ============================================================
 
 def get_candles(instrument_uid):
+    """Получает 4H свечи небольшими кусками. При 30014 автоматически уменьшает кусок."""
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=HISTORY_DAYS)
 
     all_candles = []
     cursor = start
-    chunk = timedelta(days=7)
+    chunk_days = 7
 
     while cursor < now:
-        chunk_end = min(cursor + chunk, now)
+        chunk_end = min(cursor + timedelta(days=chunk_days), now)
         payload = {
             "from": cursor.isoformat(),
             "to": chunk_end.isoformat(),
@@ -311,11 +319,21 @@ def get_candles(instrument_uid):
             "instrumentId": instrument_uid,
             "candleSourceType": "CANDLE_SOURCE_EXCHANGE",
         }
-        data = api_post(CANDLES_URL, payload)
-        candles = data.get("candles", [])
-        if isinstance(candles, list):
-            all_candles.extend(candles)
-        cursor = chunk_end
+
+        try:
+            data = api_post(CANDLES_URL, payload)
+            candles = data.get("candles", [])
+            if isinstance(candles, list):
+                all_candles.extend(candles)
+            cursor = chunk_end
+        except Exception as exc:
+            text = str(exc)
+            # T-Bank code 30014: запрошенный период слишком большой.
+            if "30014" in text and chunk_days > 1:
+                chunk_days = max(1, chunk_days // 2)
+                log.warning("Слишком большой период свечей, уменьшаю кусок до %s дней", chunk_days)
+                continue
+            raise
 
     return all_candles
 
@@ -817,37 +835,85 @@ def get_share_status(stock):
 # COLLECT DATA
 # ============================================================
 
-def collect_data():
+def make_bootstrap_data(message=None):
+    """Безопасный ответ для UI, даже если первый анализ ещё идёт."""
+    text_message = message or DATA_CACHE_ERROR
     futures = [
-        get_future_status("CR", "Юань", "¥"),
-        get_future_status("GD", "Золото", "🥇"),
-        get_future_status("BR", "Нефть Brent", "🛢️"),
+        empty_status("future", "CR", "Юань", "¥"),
+        empty_status("future", "GD", "Золото", "🥇"),
+        empty_status("future", "BR", "Нефть Brent", "🛢️"),
     ]
-    shares = [get_share_status(stock) for stock in STOCKS]
+    shares = [empty_status("share", x["code"], x["title"], x["emoji"]) for x in STOCKS]
+    for item in futures + shares:
+        item["message"] = text_message
+    return {
+        "updated": datetime.now(timezone.utc).isoformat(),
+        "ready": False,
+        "server_ok": True,
+        "futures": futures,
+        "shares": shares,
+        "last_signal": {"title": "Нет сигналов", "signal": "—", "direction": "—", "description": ""},
+        "statistics": calculate_statistics([]),
+        "settings": {
+            "position_size": POSITION_SIZE_RUBLES,
+            "buy_commission": BUY_COMMISSION_PERCENT,
+            "sell_commission": SELL_COMMISSION_PERCENT,
+            "tax": TAX_PERCENT,
+            "candle_interval": "4 часа",
+            "history_days": HISTORY_DAYS,
+            "exit_rule": "Только противоположный сигнал",
+        },
+    }
+
+
+def collect_data():
+    """Полный анализ. Ошибка одного инструмента не ломает весь ответ."""
+    futures = []
+    for args in (("CR", "Юань", "¥"), ("GD", "Золото", "🥇"), ("BR", "Нефть Brent", "🛢️")):
+        try:
+            futures.append(get_future_status(*args))
+        except Exception as exc:
+            log.exception("Критическая ошибка фьючерса %s", args[1])
+            item = empty_status("future", args[0], args[1], args[2])
+            item["message"] = "%s: %s" % (type(exc).__name__, exc)
+            futures.append(item)
+
+    shares = []
+    for stock in STOCKS:
+        try:
+            shares.append(get_share_status(stock))
+        except Exception as exc:
+            log.exception("Критическая ошибка акции %s", stock["title"])
+            item = empty_status("share", stock["code"], stock["title"], stock["emoji"])
+            item["message"] = "%s: %s" % (type(exc).__name__, exc)
+            shares.append(item)
+
     instruments = futures + shares
 
     last_signal = {"title": "Нет сигналов", "signal": "—", "direction": "—", "description": ""}
     for item in instruments:
-        signal = item["strategy"].get("signal")
+        signal = (item.get("strategy") or {}).get("signal")
         if signal in ("LONG", "SHORT"):
             last_signal = {
-                "title": item["title"],
+                "title": item.get("title", "—"),
                 "signal": signal,
-                "direction": item["strategy"].get("direction", "—"),
-                "description": item["strategy"].get("description", ""),
+                "direction": (item.get("strategy") or {}).get("direction", "—"),
+                "description": (item.get("strategy") or {}).get("description", ""),
             }
             break
 
     all_trades = []
     for item in instruments:
-        all_trades.extend(item.get("history", []))
+        trades = item.get("history", [])
+        if isinstance(trades, list):
+            all_trades.extend(trades)
 
     total_statistics = calculate_statistics(all_trades)
 
     existing_history = load_history()
     existing_keys = {
         (t.get("instrument"), t.get("entry_time"), t.get("exit_time"), t.get("direction"))
-        for t in existing_history
+        for t in existing_history if isinstance(t, dict)
     }
 
     for trade in all_trades:
@@ -860,6 +926,8 @@ def collect_data():
 
     return {
         "updated": datetime.now(timezone.utc).isoformat(),
+        "ready": True,
+        "server_ok": True,
         "futures": futures,
         "shares": shares,
         "last_signal": last_signal,
@@ -876,23 +944,56 @@ def collect_data():
     }
 
 
+def refresh_cache():
+    global DATA_CACHE, DATA_CACHE_ERROR
+    try:
+        data = collect_data()
+        with CACHE_LOCK:
+            DATA_CACHE = data
+            DATA_CACHE_ERROR = ""
+        log.info("Кэш Markus Trade обновлён успешно")
+        return data
+    except Exception as exc:
+        DATA_CACHE_ERROR = "%s: %s" % (type(exc).__name__, exc)
+        log.exception("Критическая ошибка полного анализа")
+        return None
+
+
 # ============================================================
 # API ROUTES
 # ============================================================
 
 @app.route("/api/status")
 def api_status():
-    try:
-        return jsonify(collect_data())
-    except Exception as exc:
-        log.exception("Ошибка /api/status")
-        return jsonify({"error": str(exc)}), 500
+    # ВАЖНО: endpoint всегда возвращает HTTP 200.
+    # Тяжёлый запрос к T-Bank выполняется в фоне, а Telegram получает кэш.
+    with CACHE_LOCK:
+        if DATA_CACHE is not None:
+            return jsonify(DATA_CACHE), 200
+        return jsonify(make_bootstrap_data(DATA_CACHE_ERROR)), 200
+
+
+@app.route("/api/health")
+def api_health():
+    token_ok = bool(get_token())
+    with CACHE_LOCK:
+        ready = DATA_CACHE is not None
+    return jsonify({
+        "server": "OK",
+        "token": token_ok,
+        "ready": ready,
+        "time": datetime.now(timezone.utc).isoformat(),
+    }), 200
 
 
 @app.route("/api/history")
 def api_history():
-    history = load_history()
-    return jsonify({"count": len(history), "history": history})
+    try:
+        history = load_history()
+        return jsonify({"count": len(history), "history": history}), 200
+    except Exception as exc:
+        log.exception("Ошибка /api/history")
+        return jsonify({"count": 0, "history": [], "error": "%s: %s" % (type(exc).__name__, exc)}), 200
 
 
 # ============================================================
@@ -1078,22 +1179,9 @@ def index():
 
 
 def background_monitor():
+    # Первый запуск и все последующие обновления идут вне HTTP-запроса.
     while True:
-        try:
-            data = collect_data()
-            log.info("MARKUS TRADE | обновление данных")
-            for item in data["futures"] + data["shares"]:
-                log.info(
-                    "%s | ticker=%s | candles=%s | signal=%s",
-                    item["title"], item["ticker"], item["candles"], item["strategy"]["signal"],
-                )
-            stats = data["statistics"]
-            log.info(
-                "СТАТИСТИКА | сделок=%s | winrate=%s%% | чистый=%s ₽",
-                stats["total"], stats["winrate"], stats["net"],
-            )
-        except Exception as exc:
-            log.exception("Ошибка фонового мониторинга: %s", exc)
+        refresh_cache()
         time.sleep(UPDATE_SECONDS)
 
 
@@ -1103,6 +1191,10 @@ if __name__ == "__main__":
         log.warning("API-токен не найден. Добавь TINKOFF_TOKEN в переменные окружения.")
     else:
         log.info("API-токен найден.")
+
+    # Сразу создаём безопасный ответ для Telegram, чтобы /api/status никогда не был пустым.
+    DATA_CACHE = None
+    DATA_CACHE_ERROR = "Первый анализ запускается в фоне…"
 
     monitor_thread = threading.Thread(target=background_monitor, daemon=True)
     monitor_thread.start()
