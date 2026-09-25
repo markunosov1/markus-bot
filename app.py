@@ -45,6 +45,12 @@ log = logging.getLogger("MARKUS_TRADE")
 
 app = Flask(__name__)
 
+@app.after_request
+def force_utf8(response):
+    if response.mimetype == "text/html":
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
+
 # ============================================================
 # TOKEN / API
 # ============================================================
@@ -938,19 +944,25 @@ body{margin:0;background:linear-gradient(135deg,#07090d,#10141c);color:#fff;font
 </div>
 <script>
 function money(v){if(v===undefined||v===null)return "0.00";return Number(v).toLocaleString("ru-RU",{minimumFractionDigits:2,maximumFractionDigits:2});}
-function esc(v){return String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");}
+function esc(v){
+  var s = (v === null || v === undefined) ? "" : String(v);
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
 function signalClass(s){if(s==="LONG")return "long";if(s==="SHORT")return "short";return "none";}
 function renderInstrumentCard(item){
  const signal=item.strategy?.signal||"Нет сигналов";const statusClass=item.status==="OK"?"status":"status error";const stats=item.statistics||{};
  let openPosition="Нет";if(item.open_position)openPosition=item.open_position.direction+" от "+item.open_position.entry_price;
  const rows=(item.strategy_selection||[]).map((r,i)=>`<div class="strategy-row"><span>${i+1}. ${esc(r.name)}</span><span>${r.statistics.total} сделок</span><span>${r.statistics.winrate}%</span><span class="${r.statistics.net>=0?"positive":"negative"}">${money(r.statistics.net)} ₽</span><span>DD ${money(r.drawdown)} ₽</span><div class="reason">${esc(r.selection_reason||"")}</div></div>`).join("");
- return `<div class="card"><h2>${esc(item.emoji)} ${esc(item.title)}</h2><span class="${statusClass}">${esc(item.status)}</span><div class="info">${esc(item.message)}</div><div class="info">Тикер: <b>${esc(item.ticker)}</b><br>UID: <b>${esc(item.uid)}</b><br>4H-свечей: <b>${item.candles}</b></div><div class="signal ${signalClass(signal)}">${esc(signal)}</div><div class="info">${esc(item.strategy?.description||"")}</div><div class="info"><b>🤖 Выбрана стратегия: ${esc(item.selected_strategy||"—")}</b><br>Закрытых сделок: <b>${stats.total||0}</b><br>Проходимость: <b>${stats.winrate||0}%</b><br>Прибыльных: <b>${stats.profitable||0}</b><br>Убыточных: <b>${stats.losing||0}</b><br>Чистый результат: <b>${money(stats.net)} ₽</b><br>Открытая позиция: <b>${esc(openPosition)}</b></div><div class="strategy-box"><b>🔬 Проверка всех стратегий</b>${rows}</div></div>`;
+ return `<div class="card"><h2>${esc(item.emoji)} ${esc(item.title)}</h2><span class="${statusClass}">${esc(item.status)}</span><div class="info">${esc(item.message)}</div><div class="info">Тикер: <b>${esc(item.ticker)}</b><br>UID: <b>${esc(item.uid)}</b><br>4H-свечей: <b>${item.candles}</b></div><div class="signal ${signalClass(signal)}">${esc(signal)}</div><div class="info">${esc((item.strategy && item.strategy.description) || "")}</div><div class="info"><b>🤖 Выбрана стратегия: ${esc(item.selected_strategy||"—")}</b><br>Закрытых сделок: <b>${stats.total||0}</b><br>Проходимость: <b>${stats.winrate||0}%</b><br>Прибыльных: <b>${stats.profitable||0}</b><br>Убыточных: <b>${stats.losing||0}</b><br>Чистый результат: <b>${money(stats.net)} ₽</b><br>Открытая позиция: <b>${esc(openPosition)}</b></div><div class="strategy-box"><b>🔬 Проверка всех стратегий</b>${rows}</div></div>`;
 }
 function renderFutures(data){document.getElementById("futures").innerHTML=(data.futures||[]).map(renderInstrumentCard).join("");}
 function renderShares(data){document.getElementById("shares").innerHTML=(data.shares||[]).map(renderInstrumentCard).join("");}
 function renderStatistics(s){document.getElementById("statistics").innerHTML=`<div class="stat"><div class="stat-title">Всего сделок</div><div class="stat-value">${s.total}</div></div><div class="stat"><div class="stat-title">Прибыльных</div><div class="stat-value">${s.profitable}</div></div><div class="stat"><div class="stat-title">Убыточных</div><div class="stat-value">${s.losing}</div></div><div class="stat"><div class="stat-title">Проходимость</div><div class="stat-value">${s.winrate}%</div></div><div class="stat"><div class="stat-title">До расходов</div><div class="stat-value">${money(s.gross)} ₽</div></div><div class="stat"><div class="stat-title">Комиссии</div><div class="stat-value">${money(s.commission)} ₽</div></div><div class="stat"><div class="stat-title">Налог</div><div class="stat-value">${money(s.tax)} ₽</div></div><div class="stat"><div class="stat-title">ЧИСТЫЙ РЕЗУЛЬТАТ</div><div class="stat-value ${s.net>=0?"positive":"negative"}">${money(s.net)} ₽</div></div>`;}
 function renderHistory(data){let all=[];[...(data.futures||[]),...(data.shares||[])].forEach(x=>{if(x.history)all=all.concat(x.history);});all.sort((a,b)=>new Date(b.exit_time)-new Date(a.exit_time));const c=document.getElementById("history");if(!all.length){c.innerHTML="Пока закрытых сделок нет.";return;}let html=`<table><thead><tr><th>Инструмент</th><th>Направление</th><th>Вход</th><th>Выход</th><th>Цена входа</th><th>Цена выхода</th><th>Результат</th><th>Комиссия</th><th>Налог</th><th>Чистый результат</th></tr></thead><tbody>`;all.slice(0,100).forEach(t=>{const net=Number(t.net_result||0),commission=Number(t.buy_commission||0)+Number(t.sell_commission||0);html+=`<tr><td>${esc(t.title)}</td><td>${esc(t.direction)}</td><td>${esc(t.entry_time)}</td><td>${esc(t.exit_time)}</td><td>${esc(t.entry_price)}</td><td>${esc(t.exit_price)}</td><td>${money(t.gross_result)} ₽</td><td>${money(commission)} ₽</td><td>${money(t.tax)} ₽</td><td class="${net>=0?"positive":"negative"}">${money(net)} ₽</td></tr>`;});html+=`</tbody></table>`;c.innerHTML=html;}
-async function loadData(){try{const response=await fetch("/api/status",{cache:"no-store"});const data=await response.json();if(data.error){document.getElementById("updated").textContent="Ошибка: "+data.error;return;}renderFutures(data);renderShares(data);renderStatistics(data.statistics);renderHistory(data);document.getElementById("updated").textContent="Обновлено: "+new Date(data.updated).toLocaleString("ru-RU");document.getElementById("positionSize").textContent=money(data.settings.position_size);document.getElementById("buyCommission").textContent=data.settings.buy_commission;document.getElementById("sellCommission").textContent=data.settings.sell_commission;document.getElementById("tax").textContent=data.settings.tax;document.getElementById("interval").textContent=data.settings.candle_interval;document.getElementById("historyDays").textContent=data.settings.history_days;document.getElementById("exitRule").textContent=data.settings.exit_rule;}catch(error){document.getElementById("updated").textContent="Ошибка загрузки: "+error;console.error(error);}}
+async function loadData(){try{var apiUrl;
+try { apiUrl = new URL("/api/status", window.location.href).toString(); }
+catch (e) { apiUrl = window.location.origin + "/api/status"; }
+const response=await fetch(apiUrl,{cache:"no-store"});const data=await response.json();if(data.error){document.getElementById("updated").textContent="Ошибка: "+data.error;return;}renderFutures(data);renderShares(data);renderStatistics(data.statistics);renderHistory(data);document.getElementById("updated").textContent="Обновлено: "+new Date(data.updated).toLocaleString("ru-RU");document.getElementById("positionSize").textContent=money(data.settings.position_size);document.getElementById("buyCommission").textContent=data.settings.buy_commission;document.getElementById("sellCommission").textContent=data.settings.sell_commission;document.getElementById("tax").textContent=data.settings.tax;document.getElementById("interval").textContent=data.settings.candle_interval;document.getElementById("historyDays").textContent=data.settings.history_days;document.getElementById("exitRule").textContent=data.settings.exit_rule;}catch(error){document.getElementById("updated").textContent="Ошибка загрузки: "+error;console.error(error);}}
 loadData();setInterval(loadData,60000);
 </script>
 </body></html>
