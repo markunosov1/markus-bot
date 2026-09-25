@@ -1580,7 +1580,10 @@ setInterval(loadScreening,300000);
 
 @app.route("/")
 def index():
-    return render_template_string(HTML)
+    return app.response_class(
+        render_template_string(HTML),
+        mimetype="text/html; charset=utf-8"
+    )
 
 
 if __name__ == "__main__":
