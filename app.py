@@ -1075,8 +1075,8 @@ def screen_strategies_for_instrument(instrument, title, instrument_code):
         temp_settings["history_days"] = max_days
 
         try:
-    candles_raw = get_candles(instrument["instrument_uid"], temp_settings)
-    candles = normalize_candles(candles_raw)
+            candles_raw = get_candles(instrument["instrument_uid"], temp_settings)
+            candles = normalize_candles(candles_raw)
 except Exception as exc:
     log.warning("Ошибка получения свечей %s/%s: %s", title, interval_label, exc)
     candles = []
