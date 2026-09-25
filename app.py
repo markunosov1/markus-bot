@@ -5,7 +5,6 @@ import logging
 import threading
 import warnings
 from datetime import datetime, timedelta, timezone
-
 import requests
 import urllib3
 from flask import Flask, jsonify, render_template_string
@@ -32,8 +31,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("MARKUS_TRADE")
-app = Flask(__name__)
 
+app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False
 
 def get_token():
     for name in ("TINKOFF_TOKEN", "TINVEST_TOKEN", "T_BANK_TOKEN", "API_TOKEN", "TOKEN"):
@@ -42,11 +42,10 @@ def get_token():
             return value.strip()
     return None
 
-
 def api_post(url, payload):
     token = get_token()
     if not token:
-        raise RuntimeError("API-ÑÐ¾ÐºÐµÐ½ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½. ÐÑÐ¾Ð²ÐµÑÑ Ð¿ÐµÑÐµÐ¼ÐµÐ½Ð½ÑÑ TINKOFF_TOKEN.")
+        raise RuntimeError("API-ÑÐ¾ÐºÐµÐ½ Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½. ÐÑÐ¾Ð²ÐµÑÑÑÐµ Ð¿ÐµÑÐµÐ¼ÐµÐ½Ð½ÑÑ TINKOFF_TOKEN.")
     response = requests.post(
         url,
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
@@ -61,11 +60,9 @@ def api_post(url, payload):
     except Exception as exc:
         raise RuntimeError("T-Bank Ð²ÐµÑÐ½ÑÐ» Ð¾ÑÐ²ÐµÑ, ÐºÐ¾ÑÐ¾ÑÑÐ¹ Ð½Ðµ ÑÐ´Ð°Ð»Ð¾ÑÑ Ð¿ÑÐ¾ÑÐ¸ÑÐ°ÑÑ ÐºÐ°Ðº JSON.") from exc
 
-
 def get_string(obj, key):
     value = obj.get(key)
     return "" if value is None else str(value)
-
 
 def parse_date(value):
     if not value:
@@ -80,7 +77,6 @@ def parse_date(value):
         return dt
     except Exception:
         return None
-
 
 def quotation_to_float(value):
     if value is None:
@@ -97,7 +93,6 @@ def quotation_to_float(value):
     except Exception:
         return 0.0
 
-
 def get_all_futures():
     for status in ("INSTRUMENT_STATUS_BASE", "INSTRUMENT_STATUS_ALL"):
         try:
@@ -109,7 +104,6 @@ def get_all_futures():
             log.warning("ÐÑÐ¸Ð±ÐºÐ° Futures (%s): %s", status, exc)
     return []
 
-
 def matches_future(future, prefix):
     text = " ".join([
         get_string(future, "ticker").upper(),
@@ -117,12 +111,11 @@ def matches_future(future, prefix):
         get_string(future, "basicAsset").upper(),
     ])
     keywords = {
-        "CR": ["CR", "CNY", "YUAN", "CNH", "Ð®ÐÐ", "ÐÐÐ¢ÐÐ"],
-        "GD": ["GD", "GOLD", "ÐÐÐÐÐ¢"],
-        "BR": ["BR", "BRENT", "ÐÐÐ¤Ð¢"],
+        "CR": ["CR", "CNY", "YUAN", "CNH", "Ð®ÐÐÐ¬", "ÐÐÐ¢ÐÐ"],
+        "GD": ["GD", "GOLD", "ÐÐÐÐÐ¢Ð"],
+        "BR": ["BR", "BRENT", "ÐÐÐ¤Ð¢Ð¬"],
     }.get(prefix.upper(), [prefix.upper()])
     return any(word in text for word in keywords)
-
 
 def find_active_future(prefix):
     queries = {
@@ -132,8 +125,6 @@ def find_active_future(prefix):
     }.get(prefix, [prefix])
     candidates = []
     now = datetime.now(timezone.utc)
-
-    # First use the full futures list; FindInstrument is a fallback.
     for item in get_all_futures():
         if not isinstance(item, dict) or not matches_future(item, prefix):
             continue
@@ -156,7 +147,6 @@ def find_active_future(prefix):
             "class_code": get_string(item, "classCode"),
             "basic_asset": get_string(item, "basicAsset"),
         })
-
     if not candidates:
         for query in queries:
             try:
@@ -190,7 +180,6 @@ def find_active_future(prefix):
                     "class_code": get_string(item, "classCode"),
                     "basic_asset": get_string(item, "basicAsset"),
                 })
-
     unique = {x["instrument_uid"]: x for x in candidates}
     candidates = list(unique.values())
     if not candidates:
@@ -198,13 +187,11 @@ def find_active_future(prefix):
     candidates.sort(key=lambda x: x.get("last_trade") or datetime.max.replace(tzinfo=timezone.utc))
     return candidates[0]
 
-
 STOCKS = [
     {"code": "SBER", "title": "Ð¡Ð±ÐµÑÐ±Ð°Ð½Ðº", "emoji": "ð¦", "queries": ["SBER", "Ð¡Ð±ÐµÑÐ±Ð°Ð½Ðº"]},
     {"code": "ROSN", "title": "Ð Ð¾ÑÐ½ÐµÑÑÑ", "emoji": "ð¢ï¸", "queries": ["ROSN", "Ð Ð¾ÑÐ½ÐµÑÑÑ"]},
     {"code": "GMKN", "title": "ÐÐ¾ÑÐ½Ð¸ÐºÐµÐ»Ñ", "emoji": "âï¸", "queries": ["GMKN", "NORNICKEL", "ÐÐ¾ÑÐ½Ð¸ÐºÐµÐ»Ñ"]},
 ]
-
 
 def find_share(stock):
     candidates = []
@@ -253,7 +240,6 @@ def find_share(stock):
     exact = [x for x in candidates if x["ticker"].upper() == stock["code"]]
     return exact[0] if exact else candidates[0]
 
-
 def get_candles(instrument_uid):
     now = datetime.now(timezone.utc)
     start = now - timedelta(hours=HISTORY_HOURS)
@@ -266,7 +252,6 @@ def get_candles(instrument_uid):
     })
     candles = data.get("candles", [])
     return candles if isinstance(candles, list) else []
-
 
 def normalize_candles(candles):
     result = []
@@ -289,7 +274,6 @@ def normalize_candles(candles):
     result.sort(key=lambda x: x["time"])
     return result
 
-
 def ema(values, period):
     if len(values) < period:
         return None
@@ -299,12 +283,10 @@ def ema(values, period):
         value = price * k + value * (1 - k)
     return value
 
-
 def sma(values, period):
     if len(values) < period:
         return None
     return sum(values[-period:]) / period
-
 
 def bollinger_strategy(candles):
     if len(candles) < 20:
@@ -323,10 +305,8 @@ def bollinger_strategy(candles):
         return {"signal": "SHORT", "direction": "ÐÐ½Ð¸Ð·", "description": f"Ð¦ÐµÐ½Ð° ÑÐ°Ð·Ð²ÐµÑÐ½ÑÐ»Ð°ÑÑ Ð¾Ñ Ð²ÐµÑÑÐ½ÐµÐ¹ Ð¿Ð¾Ð»Ð¾ÑÑ Bollinger ({upper:.2f})"}
     return no_signal(f"Ð¦ÐµÐ½Ð° Ð²Ð½ÑÑÑÐ¸ Ð´Ð¸Ð°Ð¿Ð°Ð·Ð¾Ð½Ð° Bollinger: {lower:.2f}â{upper:.2f}")
 
-
 def no_signal(description="Ð¡Ð¸Ð³Ð½Ð°Ð» Ð½Ðµ ÑÑÐ¾ÑÐ¼Ð¸ÑÐ¾Ð²Ð°Ð½"):
     return {"signal": "ÐÐµÑ ÑÐ¸Ð³Ð½Ð°Ð»Ð¾Ð²", "direction": "â", "description": description}
-
 
 def user_strategy(candles):
     if len(candles) < 8:
@@ -344,11 +324,10 @@ def user_strategy(candles):
         and closes[-1] > closes[-2] and closes[-2] > closes[-3]
     )
     if short_pattern:
-        return {"signal": "SHORT", "direction": "ÐÐ½Ð¸Ð·", "description": "ÐÐ²ÑÐ¾ÑÑÐºÐ°Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ: ÑÐ°ÑÑÑÑÐ¸Ðµ Ð¼Ð°ÐºÑÐ¸Ð¼ÑÐ¼Ñ â Ð¿Ð¾Ð´ÑÐ²ÐµÑÐ¶Ð´ÑÐ½Ð½ÑÐ¹ ÑÐ°Ð·Ð²Ð¾ÑÐ¾Ñ Ð²Ð½Ð¸Ð·"}
+        return {"signal": "SHORT", "direction": "ÐÐ½Ð¸Ð·", "description": "ÐÐ²ÑÐ¾ÑÑÐºÐ°Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ: ÑÐ°ÑÑÑÑÐ¸Ðµ Ð¼Ð°ÐºÑÐ¸Ð¼ÑÐ¼Ñ â Ð¿Ð¾Ð´ÑÐ²ÐµÑÐ¶Ð´ÐµÐ½Ð½ÑÐ¹ ÑÐ°Ð·Ð²Ð¾ÑÐ¾Ñ Ð²Ð½Ð¸Ð·"}
     if long_pattern:
-        return {"signal": "LONG", "direction": "ÐÐ²ÐµÑÑ", "description": "ÐÐ²ÑÐ¾ÑÑÐºÐ°Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ: ÑÐ½Ð¸Ð¶Ð°ÑÑÐ¸ÐµÑÑ Ð¼Ð¸Ð½Ð¸Ð¼ÑÐ¼Ñ â Ð¿Ð¾Ð´ÑÐ²ÐµÑÐ¶Ð´ÑÐ½Ð½ÑÐ¹ ÑÐ°Ð·Ð²Ð¾ÑÐ¾Ñ Ð²Ð²ÐµÑÑ"}
+        return {"signal": "LONG", "direction": "ÐÐ²ÐµÑÑ", "description": "ÐÐ²ÑÐ¾ÑÑÐºÐ°Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ: ÑÐ½Ð¸Ð¶Ð°ÑÑÐ¸ÐµÑÑ Ð¼Ð¸Ð½Ð¸Ð¼ÑÐ¼Ñ â Ð¿Ð¾Ð´ÑÐ²ÐµÑÐ¶Ð´ÐµÐ½Ð½ÑÐ¹ ÑÐ°Ð·Ð²Ð¾ÑÐ¾Ñ Ð²Ð²ÐµÑÑ"}
     return no_signal("ÐÐµÑ Ð¿Ð¾Ð»Ð½Ð¾Ð³Ð¾ ÑÐ¾Ð²Ð¿Ð°Ð´ÐµÐ½Ð¸Ñ ÑÑÐ»Ð¾Ð²Ð¸Ð¹ Ð°Ð²ÑÐ¾ÑÑÐºÐ¾Ð¹ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¸")
-
 
 def ema_trend_strategy(candles):
     if len(candles) < 30:
@@ -363,7 +342,6 @@ def ema_trend_strategy(candles):
         return {"signal": "SHORT", "direction": "ÐÐ½Ð¸Ð·", "description": "EMA 9 Ð½Ð¸Ð¶Ðµ EMA 21, ÑÐµÐ½Ð° Ð½Ð¸Ð¶Ðµ EMA 9 Ð¸ ÑÐ½Ð¸Ð¶Ð°ÐµÑÑÑ"}
     return no_signal("ÐÐµÑ Ð¿Ð¾Ð´ÑÐ²ÐµÑÐ¶Ð´ÐµÐ½Ð¸Ñ ÑÑÐµÐ½Ð´Ð° EMA")
 
-
 def breakout_strategy(candles):
     if len(candles) < 21:
         return no_signal("ÐÐµÐ´Ð¾ÑÑÐ°ÑÐ¾ÑÐ½Ð¾ ÑÐ²ÐµÑÐµÐ¹ Ð´Ð»Ñ Breakout")
@@ -376,7 +354,6 @@ def breakout_strategy(candles):
     if last["close"] < low:
         return {"signal": "SHORT", "direction": "ÐÐ½Ð¸Ð·", "description": f"ÐÐ°ÐºÑÑÑÐ¸Ðµ Ð¿ÑÐ¾Ð±Ð¸Ð»Ð¾ Ð¼Ð¸Ð½Ð¸Ð¼ÑÐ¼ 20 Ð¿ÑÐµÐ´ÑÐ´ÑÑÐ¸Ñ ÑÐ²ÐµÑÐµÐ¹ ({low:.2f})"}
     return no_signal("ÐÑÐ¾Ð±Ð¾Ñ 20-ÑÐ²ÐµÑÐ½Ð¾Ð³Ð¾ Ð´Ð¸Ð°Ð¿Ð°Ð·Ð¾Ð½Ð° Ð½ÐµÑ")
-
 
 def rsi_strategy(candles):
     if len(candles) < 16:
@@ -396,7 +373,6 @@ def rsi_strategy(candles):
         return {"signal": "SHORT", "direction": "ÐÐ½Ð¸Ð·", "description": f"RSI Ð¿ÐµÑÐµÐºÑÐ¿Ð»ÐµÐ½ ({rsi:.1f}) Ð¸ ÑÐµÐ½Ð° ÑÐ°Ð·Ð²Ð¾ÑÐ°ÑÐ¸Ð²Ð°ÐµÑÑÑ Ð²Ð½Ð¸Ð·"}
     return no_signal(f"RSI ÑÐµÐ¹ÑÐ°Ñ {rsi:.1f}; ÑÑÐ»Ð¾Ð²Ð¸Ñ Ð²ÑÐ¾Ð´Ð° Ð½Ðµ Ð²ÑÐ¿Ð¾Ð»Ð½ÐµÐ½Ñ")
 
-
 def macd_strategy(candles):
     if len(candles) < 36:
         return no_signal("ÐÐµÐ´Ð¾ÑÑÐ°ÑÐ¾ÑÐ½Ð¾ ÑÐ²ÐµÑÐµÐ¹ Ð´Ð»Ñ MACD")
@@ -411,7 +387,6 @@ def macd_strategy(candles):
         return {"signal": "SHORT", "direction": "ÐÐ½Ð¸Ð·", "description": "EMA 12 Ð¿ÐµÑÐµÑÐµÐºÐ»Ð° EMA 26 ÑÐ²ÐµÑÑÑ Ð²Ð½Ð¸Ð·"}
     return no_signal("ÐÐµÑÐµÑÐµÑÐµÐ½Ð¸Ñ MACD Ð½Ð° Ð¿Ð¾ÑÐ»ÐµÐ´Ð½ÐµÐ¹ ÑÐ²ÐµÑÐµ Ð½ÐµÑ")
 
-
 STRATEGIES = [
     {"name": "Ð¢Ð²Ð¾Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ", "key": "user", "fn": user_strategy, "min_bars": 8},
     {"name": "EMA Trend", "key": "ema", "fn": ema_trend_strategy, "min_bars": 30},
@@ -421,10 +396,8 @@ STRATEGIES = [
     {"name": "Bollinger", "key": "bollinger", "fn": bollinger_strategy, "min_bars": 20},
 ]
 
-
 def calculate_commission(amount, percent):
     return amount * percent / 100.0
-
 
 def calculate_trade_result(direction, entry_price, exit_price):
     if entry_price <= 0 or exit_price <= 0:
@@ -448,7 +421,6 @@ def calculate_trade_result(direction, entry_price, exit_price):
         "net_result": round(net_result, 2),
     }
 
-
 def calculate_statistics(trades):
     total = len(trades)
     if total == 0:
@@ -470,7 +442,6 @@ def calculate_statistics(trades):
         "net": round(net, 2),
     }
 
-
 def calculate_max_drawdown(trades):
     equity = 0.0
     peak = 0.0
@@ -481,9 +452,7 @@ def calculate_max_drawdown(trades):
         max_dd = min(max_dd, equity - peak)
     return round(abs(max_dd), 2)
 
-
 def build_strategy_history(candles, instrument, title, strategy_fn):
-    """Backtest strategy on the FULL available history, not only 8 candles."""
     min_bars = 8
     for s in STRATEGIES:
         if s["fn"] is strategy_fn:
@@ -491,7 +460,6 @@ def build_strategy_history(candles, instrument, title, strategy_fn):
             break
     if len(candles) < min_bars:
         return [], None
-
     trades = []
     current_position = None
     for i in range(min_bars - 1, len(candles)):
@@ -501,7 +469,6 @@ def build_strategy_history(candles, instrument, title, strategy_fn):
         candle = candles[i]
         price = candle["close"]
         candle_time = candle["time"]
-
         if current_position is None:
             if signal in ("LONG", "SHORT"):
                 current_position = {
@@ -512,10 +479,8 @@ def build_strategy_history(candles, instrument, title, strategy_fn):
                     "entry_time": candle_time,
                 }
             continue
-
         if signal == current_position["direction"] or signal == "ÐÐµÑ ÑÐ¸Ð³Ð½Ð°Ð»Ð¾Ð²":
             continue
-
         if signal in ("LONG", "SHORT") and signal != current_position["direction"]:
             result = calculate_trade_result(current_position["direction"], current_position["entry_price"], price)
             if result is not None:
@@ -538,9 +503,7 @@ def build_strategy_history(candles, instrument, title, strategy_fn):
                 "entry_price": price,
                 "entry_time": candle_time,
             }
-
     return trades, current_position
-
 
 def evaluate_all_strategies(candles, instrument, title):
     rows = []
@@ -550,7 +513,6 @@ def evaluate_all_strategies(candles, instrument, title):
         drawdown = calculate_max_drawdown(trades)
         last_analysis = strategy["fn"](candles)
         if stats["total"] >= MIN_BACKTEST_TRADES:
-            # Transparent technical selection score: historical net profit, win rate and drawdown.
             score = (stats["net"] / (1.0 + drawdown)) * 100 + stats["winrate"] * 2
             eligible = True
             reason = "ÐÑÑÑ Ð¼Ð¸Ð½Ð¸Ð¼ÑÐ¼ 3 Ð·Ð°ÐºÑÑÑÑÐµ ÑÐ´ÐµÐ»ÐºÐ¸; ÑÑÐ¸ÑÑÐ²Ð°ÑÑÑÑ ÑÐ¸ÑÑÑÐ¹ ÑÐµÐ·ÑÐ»ÑÑÐ°Ñ, Ð¿ÑÐ¾ÑÐ¾Ð´Ð¸Ð¼Ð¾ÑÑÑ Ð¸ Ð¿ÑÐ¾ÑÐ°Ð´ÐºÐ°."
@@ -571,7 +533,6 @@ def evaluate_all_strategies(candles, instrument, title):
             "eligible": eligible,
             "reason": reason,
         })
-
     eligible_rows = [r for r in rows if r["eligible"]]
     if eligible_rows:
         best = max(eligible_rows, key=lambda x: x["score"])
@@ -592,18 +553,15 @@ def evaluate_all_strategies(candles, instrument, title):
     rows.sort(key=lambda x: (x["is_selected"], x["score"]), reverse=True)
     return rows, best, selection_reason
 
-
 def strategy_signal_from_best(candles, best):
     for strategy in STRATEGIES:
         if strategy["key"] == best["key"]:
             return strategy["fn"](candles)
     return no_signal()
 
-
 def analyze_strategy(candles):
     _, best, _ = evaluate_all_strategies(candles, "instrument", "instrument")
     return strategy_signal_from_best(candles, best)
-
 
 def load_history():
     if not os.path.exists(HISTORY_FILE):
@@ -616,14 +574,12 @@ def load_history():
         log.warning("ÐÑÐ¸Ð±ÐºÐ° ÑÑÐµÐ½Ð¸Ñ Ð¸ÑÑÐ¾ÑÐ¸Ð¸: %s", exc)
         return []
 
-
 def save_history(history):
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         log.error("ÐÑÐ¸Ð±ÐºÐ° ÑÐ¾ÑÑÐ°Ð½ÐµÐ½Ð¸Ñ Ð¸ÑÑÐ¾ÑÐ¸Ð¸: %s", exc)
-
 
 def base_result(kind, code, title, emoji):
     return {
@@ -633,7 +589,6 @@ def base_result(kind, code, title, emoji):
         "selected_strategy": "â", "selection_reason": "â", "strategy_selection": [],
         "history": [], "statistics": calculate_statistics([]), "open_position": None,
     }
-
 
 def analyze_instrument(result, instrument, instrument_code, title):
     result["ticker"] = instrument["ticker"]
@@ -655,7 +610,6 @@ def analyze_instrument(result, instrument, instrument_code, title):
     result["statistics"] = best["statistics"]
     return result
 
-
 def get_future_status(prefix, title, emoji):
     result = base_result("future", prefix, title, emoji)
     try:
@@ -668,7 +622,6 @@ def get_future_status(prefix, title, emoji):
         log.exception("ÐÑÐ¸Ð±ÐºÐ° %s", title)
         result["message"] = str(exc)
         return result
-
 
 def get_share_status(stock):
     result = base_result("share", stock["code"], stock["title"], stock["emoji"])
@@ -683,7 +636,6 @@ def get_share_status(stock):
         result["message"] = str(exc)
         return result
 
-
 def collect_data():
     futures = [
         get_future_status("CR", "Ð®Ð°Ð½Ñ", "Â¥"),
@@ -696,7 +648,6 @@ def collect_data():
     for item in instruments:
         all_trades.extend(item.get("history", []))
     total_statistics = calculate_statistics(all_trades)
-
     last_signal = {"title": "ÐÐµÑ ÑÐ¸Ð³Ð½Ð°Ð»Ð¾Ð²", "signal": "â", "direction": "â", "description": ""}
     for item in instruments:
         signal = item["strategy"].get("signal")
@@ -707,7 +658,6 @@ def collect_data():
                 "description": item["strategy"].get("description", ""),
             }
             break
-
     existing_history = load_history()
     existing_keys = {
         (t.get("instrument"), t.get("entry_time"), t.get("exit_time"), t.get("direction"))
@@ -719,7 +669,6 @@ def collect_data():
             existing_history.append(trade)
             existing_keys.add(key)
     save_history(existing_history[-5000:])
-
     return {
         "updated": datetime.now(timezone.utc).isoformat(),
         "futures": futures,
@@ -738,7 +687,6 @@ def collect_data():
         },
     }
 
-
 @app.route("/api/status")
 def api_status():
     try:
@@ -747,12 +695,10 @@ def api_status():
         log.exception("ÐÑÐ¸Ð±ÐºÐ° /api/status")
         return jsonify({"error": str(exc)}), 500
 
-
 @app.route("/api/history")
 def api_history():
     history = load_history()
     return jsonify({"count": len(history), "history": history})
-
 
 HTML = r"""
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -775,11 +721,9 @@ async function loadData(){try{const response=await fetch('/api/status');const da
 </script></body></html>
 """
 
-
 @app.route("/")
 def index():
     return render_template_string(HTML)
-
 
 def background_monitor():
     while True:
@@ -793,7 +737,6 @@ def background_monitor():
         except Exception as exc:
             log.exception("ÐÑÐ¸Ð±ÐºÐ° ÑÐ¾Ð½Ð¾Ð²Ð¾Ð³Ð¾ Ð¼Ð¾Ð½Ð¸ÑÐ¾ÑÐ¸Ð½Ð³Ð°: %s", exc)
         time.sleep(UPDATE_SECONDS)
-
 
 if __name__ == "__main__":
     if not get_token():
