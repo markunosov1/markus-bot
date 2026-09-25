@@ -99,6 +99,8 @@ except Exception:
         app.config["JSON_AS_ASCII"] = False
     except Exception:
         pass
+
+
 # ============================================================
 # БАЗА ДАННЫХ (PostgreSQL / Neon)
 # ============================================================
@@ -123,7 +125,6 @@ def init_db():
             """)
             conn.commit()
     log.info("Таблица settings готова.")
-
 
 # ============================================================
 # РАБОТА С API
@@ -423,7 +424,6 @@ def atr(candles, period=14):
     if not trs:
         return 0.0
     return sum(trs[-period:]) / period
-
 # ============================================================
 # СТРАТЕГИИ
 # ============================================================
@@ -662,7 +662,6 @@ STRATEGIES = [
     {"name": "Double Top/Bottom", "key": "double", "fn": double_pattern_strategy, "min_bars": 40},
     {"name": "SuperTrend", "key": "supertrend", "fn": supertrend_strategy, "min_bars": 15},
 ]
-
 # ============================================================
 # РАСЧЁТ РЕЗУЛЬТАТОВ
 # ============================================================
@@ -1043,7 +1042,6 @@ def get_share_status(stock, settings):
         log.exception("Ошибка акции %s", stock["title"])
         result["message"] = str(exc)
         return result
-
 # ============================================================
 # СБОР ДАННЫХ
 # ============================================================
@@ -1169,6 +1167,15 @@ def background_monitor():
         except Exception as exc:
             log.exception("Ошибка фонового мониторинга: %s", exc)
         time.sleep(UPDATE_SECONDS)
+
+
+# ============================================================
+# ИНИЦИАЛИЗАЦИЯ БД ПРИ СТАРТЕ (для gunicorn)
+# ============================================================
+try:
+    init_db()
+except Exception as _exc:
+    log.error("Не удалось инициализировать БД при старте: %s", _exc)
 
 
 # ============================================================
@@ -1376,3 +1383,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     log.info("MARKUS TRADE запускается на порту %s", port)
     app.run(host="0.0.0.0", port=port, debug=False)
+
+
+
+
