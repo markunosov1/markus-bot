@@ -1364,7 +1364,7 @@ _start_background_if_needed()
 
 
 HTML = r"""
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Markus Trade</title>
 <style>
 *{box-sizing:border-box}
@@ -1405,8 +1405,8 @@ button{margin-top:10px;margin-right:6px;border:none;border-radius:12px;padding:1
 input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color:#fff;border:1px solid rgba(255,255,255,.15)}
 details summary{cursor:pointer;color:#d7aa52;font-weight:bold;margin-top:20px;padding:8px 0;list-style:none}
 details summary::-webkit-details-marker{display:none}
-details summary::before{content:"â¶ ";font-size:11px}
-details[open] summary::before{content:"â¼ "}
+details summary::before{content:"[+] ";font-size:12px}
+details[open] summary::before{content:"[-] "}
 .screening-card{background:#0d1219;border-radius:12px;padding:14px;margin-bottom:10px;border-left:3px solid #52e58a}
 .screening-card-rej{background:#0d1219;border-radius:10px;padding:11px;margin-bottom:8px;border-left:3px solid #442020}
 .screening-card .sc-title{font-size:15px;font-weight:bold;color:#fff;margin-bottom:8px}
@@ -1421,61 +1421,61 @@ details[open] summary::before{content:"â¼ "}
 @media(max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
 @media(max-width:700px){.grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.header{align-items:flex-start;gap:10px;flex-direction:column}}
 </style></head><body><div class="container">
-<div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">ÐÐ°Ð³ÑÑÐ·ÐºÐ°...</div></div>
+<div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">Loading...</div></div>
 
 <div class="card" id="screeningCard">
-<h2>ð ÐÐ²ÑÐ¾Ð¼Ð°ÑÐ¸ÑÐµÑÐºÐ¸Ð¹ ÑÐºÑÐ¸Ð½Ð¸Ð½Ð³ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¹</h2>
-<div class="info" id="screeningInfo">ÐÐ½Ð°Ð»Ð¸Ð· Ð·Ð°Ð¿ÑÑÐµÐ½. ÐÐµÑÐ²ÑÐ¹ ÑÐ°ÑÑÑÑ Ð¼Ð¾Ð¶ÐµÑ Ð·Ð°Ð½ÑÑÑ 1-3 Ð¼Ð¸Ð½ÑÑÑ...</div>
+<h2>Auto Strategy Screening</h2>
+<div class="info" id="screeningInfo">Screening started. First run may take 1-3 minutes...</div>
 <div id="screeningPassed" style="margin-top:15px"></div>
 <details>
-<summary>â ÐÑÐºÐ»Ð¾Ð½ÑÐ½Ð½ÑÐµ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¸ (Ð½Ð°Ð¶Ð¼Ð¸ÑÐµ ÑÑÐ¾Ð±Ñ ÑÐ°Ð·Ð²ÐµÑÐ½ÑÑÑ)</summary>
+<summary>Rejected strategies (click to expand)</summary>
 <div id="screeningRejected" style="margin-top:12px"></div>
 </details>
 </div>
 
 <div class="card" id="riskCard">
-<h2>âï¸ Ð£Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¸Ðµ Ð±ÑÐºÑÐµÑÑÐ¾Ð¼</h2>
+<h2>Backtest Settings</h2>
 <div class="info">
-<b>Ð¢Ð°Ð¹Ð¼ÑÑÐµÐ¹Ð¼ (Ð´Ð»Ñ ÐºÐ°ÑÑÐ¾ÑÐµÐº Ð½Ð¸Ð¶Ðµ):</b><br>
+<b>Timeframe (for cards below):</b><br>
 <select id="intervalSelect" style="width:100%" onchange="onIntervalChange()">
-<option value="CANDLE_INTERVAL_5_MIN">5 Ð¼Ð¸Ð½ÑÑ</option>
-<option value="CANDLE_INTERVAL_15_MIN">15 Ð¼Ð¸Ð½ÑÑ</option>
-<option value="CANDLE_INTERVAL_HOUR">1 ÑÐ°Ñ</option>
-<option value="CANDLE_INTERVAL_4_HOUR">4 ÑÐ°ÑÐ°</option>
-<option value="CANDLE_INTERVAL_DAY">1 Ð´ÐµÐ½Ñ</option>
+<option value="CANDLE_INTERVAL_5_MIN">5 min</option>
+<option value="CANDLE_INTERVAL_15_MIN">15 min</option>
+<option value="CANDLE_INTERVAL_HOUR">1 hour</option>
+<option value="CANDLE_INTERVAL_4_HOUR">4 hours</option>
+<option value="CANDLE_INTERVAL_DAY">1 day</option>
 </select>
 <br><br>
-<b>ÐÐ»ÑÐ±Ð¸Ð½Ð° Ð¸ÑÑÐ¾ÑÐ¸Ð¸ (Ð´Ð½ÐµÐ¹):</b><br>
+<b>History depth (days):</b><br>
 <input type="number" id="historyDaysInput" min="1" max="180" step="1" style="width:100%">
 <div style="font-size:11px;color:#7a8394;margin-top:4px" id="historyHint"></div>
 <br>
-<b>ð¡ï¸ Ð Ð¸ÑÐº-Ð¼ÐµÐ½ÐµÐ´Ð¶Ð¼ÐµÐ½Ñ</b><br><br>
-<label><input type="checkbox" id="useSL"> Ð¡ÑÐ¾Ð¿-Ð»Ð¾ÑÑ</label>
-<input type="number" id="slMult" step="0.1" min="0.5" style="width:70px"> Ã ATR<br>
-<label><input type="checkbox" id="useTP"> Ð¢ÐµÐ¹Ðº-Ð¿ÑÐ¾ÑÐ¸Ñ</label>
-<input type="number" id="tpMult" step="0.1" min="0.5" style="width:70px"> Ã ATR<br>
-<label><input type="checkbox" id="useBE"> ÐÐµÐ·ÑÐ±ÑÑÐ¾Ðº</label>
-<input type="number" id="beTrig" step="0.1" min="0.1" style="width:70px"> Ã ATR<br><br>
-<button onclick="saveRiskSettings()">ð¾ Ð¡Ð¾ÑÑÐ°Ð½Ð¸ÑÑ</button>
-<button onclick="loadData()">ð ÐÐµÑÐµÑÑÐ¸ÑÐ°ÑÑ</button>
+<b>Risk Management</b><br><br>
+<label><input type="checkbox" id="useSL"> Stop-Loss</label>
+<input type="number" id="slMult" step="0.1" min="0.5" style="width:70px"> x ATR<br>
+<label><input type="checkbox" id="useTP"> Take-Profit</label>
+<input type="number" id="tpMult" step="0.1" min="0.5" style="width:70px"> x ATR<br>
+<label><input type="checkbox" id="useBE"> Breakeven</label>
+<input type="number" id="beTrig" step="0.1" min="0.1" style="width:70px"> x ATR<br><br>
+<button onclick="saveRiskSettings()">Save</button>
+<button onclick="loadData()">Recalculate</button>
 </div>
 </div>
 
-<div class="section-title">ð Ð¤Ð¬Ð®Ð§ÐÐ Ð¡Ð«</div><div class="grid" id="futures"></div>
-<div class="section-title">ð ÐÐÐ¦ÐÐ</div><div class="grid" id="shares"></div>
+<div class="section-title">FUTURES</div><div class="grid" id="futures"></div>
+<div class="section-title">STOCKS</div><div class="grid" id="shares"></div>
 
-<div class="card statistics"><h2>ð ÐÐ±ÑÐ°Ñ ÑÑÐ°ÑÐ¸ÑÑÐ¸ÐºÐ°</h2><div class="stats-grid" id="statistics"></div></div>
-<div class="card history"><h2>ð ÐÑÑÐ¾ÑÐ¸Ñ ÑÐ´ÐµÐ»Ð¾Ðº</h2><div class="table-wrap" id="history"></div></div>
+<div class="card statistics"><h2>Total Statistics</h2><div class="stats-grid" id="statistics"></div></div>
+<div class="card history"><h2>Trade History</h2><div class="table-wrap" id="history"></div></div>
 
-<div class="card settings"><h2>â¹ï¸ ÐÐ°ÑÐ°Ð¼ÐµÑÑÑ</h2>
-Ð Ð°Ð·Ð¼ÐµÑ Ð²Ð¸ÑÑÑÐ°Ð»ÑÐ½Ð¾Ð¹ Ð¿Ð¾Ð·Ð¸ÑÐ¸Ð¸: <b id="positionSize">---</b> â½<br>
-ÐÐ¾Ð¼Ð¸ÑÑÐ¸Ñ Ð¿Ð¾ÐºÑÐ¿ÐºÐ¸: <b id="buyCommission">---</b>%<br>
-ÐÐ¾Ð¼Ð¸ÑÑÐ¸Ñ Ð¿ÑÐ¾Ð´Ð°Ð¶Ð¸: <b id="sellCommission">---</b>%<br>
-ÐÐ°Ð»Ð¾Ð³: <b id="tax">---</b>%<br>
-Ð¢Ð°Ð¹Ð¼ÑÑÐµÐ¹Ð¼: <b id="interval">---</b><br>
-ÐÑÑÐ¾ÑÐ¸Ñ: <b id="historyDays">---</b> Ð´Ð½ÐµÐ¹<br>
-Ð¡ÑÑÐ°ÑÐµÐ³Ð¸Ð¹: <b id="strategiesCount">---</b><br>
-ÐÑÑÐ¾Ð´ Ð¸Ð· ÑÐ´ÐµÐ»ÐºÐ¸: <b id="exitRule">---</b></div>
+<div class="card settings"><h2>Parameters</h2>
+Position size: <b id="positionSize">---</b> RUB<br>
+Buy commission: <b id="buyCommission">---</b>%<br>
+Sell commission: <b id="sellCommission">---</b>%<br>
+Tax: <b id="tax">---</b>%<br>
+Timeframe: <b id="interval">---</b><br>
+History: <b id="historyDays">---</b> days<br>
+Strategies: <b id="strategiesCount">---</b><br>
+Exit rule: <b id="exitRule">---</b></div>
 
 </div>
 
@@ -1485,12 +1485,12 @@ function signalClass(s){return s==='LONG'?'long':s==='SHORT'?'short':'none'}
 
 const MAX_HISTORY_DAYS_JS = {"CANDLE_INTERVAL_5_MIN":7,"CANDLE_INTERVAL_15_MIN":14,"CANDLE_INTERVAL_HOUR":30,"CANDLE_INTERVAL_4_HOUR":90,"CANDLE_INTERVAL_DAY":365};
 const DEFAULT_HISTORY_FOR_INTERVAL_JS = {"CANDLE_INTERVAL_5_MIN":5,"CANDLE_INTERVAL_15_MIN":10,"CANDLE_INTERVAL_HOUR":30,"CANDLE_INTERVAL_4_HOUR":60,"CANDLE_INTERVAL_DAY":60};
-const INTERVAL_LABELS = {"CANDLE_INTERVAL_5_MIN":"5 Ð¼Ð¸Ð½ÑÑ","CANDLE_INTERVAL_15_MIN":"15 Ð¼Ð¸Ð½ÑÑ","CANDLE_INTERVAL_HOUR":"1 ÑÐ°Ñ","CANDLE_INTERVAL_4_HOUR":"4 ÑÐ°ÑÐ°","CANDLE_INTERVAL_DAY":"1 Ð´ÐµÐ½Ñ"};
+const INTERVAL_LABELS = {"CANDLE_INTERVAL_5_MIN":"5 min","CANDLE_INTERVAL_15_MIN":"15 min","CANDLE_INTERVAL_HOUR":"1 hour","CANDLE_INTERVAL_4_HOUR":"4 hours","CANDLE_INTERVAL_DAY":"1 day"};
 
 function updateHistoryHint(interval){
   const hint=document.getElementById('historyHint');
   const maxDays=MAX_HISTORY_DAYS_JS[interval]||60;
-  hint.textContent='ÐÐ°ÐºÑÐ¸Ð¼ÑÐ¼ Ð´Ð»Ñ '+(INTERVAL_LABELS[interval]||interval)+': '+maxDays+' Ð´Ð½ÐµÐ¹';
+  hint.textContent='Maximum for '+(INTERVAL_LABELS[interval]||interval)+': '+maxDays+' days';
 }
 function onIntervalChange(){
   const interval=document.getElementById('intervalSelect').value;
@@ -1504,26 +1504,26 @@ function onIntervalChange(){
 function renderInstrumentCard(item){
   const signal=item.strategy.signal;
   const stats=item.statistics||{};
-  let open='ÐÐµÑ';
-  if(item.open_position) open=item.open_position.direction+' Ð¾Ñ '+money(item.open_position.entry_price);
-  return `<div class="card"><h2>${item.emoji} ${item.title}</h2><span class="status ${item.status==='OK'?'':'error'}">${item.status}</span><div class="info">${item.message||''}</div><div class="info">Ð¢Ð¸ÐºÐµÑ: <b>${item.ticker}</b><br>UID: <b>${item.uid}</b><br>Ð¡Ð²ÐµÑÐµÐ¹: <b>${item.candles}</b></div><div class="signal ${signalClass(signal)}">${signal}</div><div class="info">${item.strategy.description||''}</div><div class="info selected"><b>ð¤ ÐÑÐ±ÑÐ°Ð½Ð°: ${item.selected_strategy}</b><br>${item.selection_reason||''}<br>Ð¡Ð´ÐµÐ»Ð¾Ðº: <b>${stats.total||0}</b> Â· Winrate: <b>${stats.winrate||0}%</b><br>ÐÑÐ¸Ð±ÑÐ»ÑÐ½ÑÑ: <b>${stats.profitable||0}</b> Â· Ð£Ð±ÑÑÐ¾ÑÐ½ÑÑ: <b>${stats.losing||0}</b><br>Ð§Ð¸ÑÑÑÐ¹: <b>${money(stats.net)} â½</b><br>ÐÑÐºÑÑÑÐ°Ñ Ð¿Ð¾Ð·Ð¸ÑÐ¸Ñ: <b>${open}</b></div><div class="strategy-box"><b>ð¬ ÐÑÐµ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¸</b>${(item.strategy_selection||[]).map((r,i)=>`<div class="strategy-row ${r.is_selected?'selected':''}"><span>${r.is_selected?'â­ ':''}${i+1}. ${r.name}</span><span>${r.statistics.total} ÑÐ´ÐµÐ».</span><span>${r.statistics.winrate}%</span><span class="${r.statistics.net>=0?'positive':'negative'}">${money(r.statistics.net)} â½</span><span>DD ${money(r.drawdown)} â½</span><span>${r.reason}</span></div>`).join('')}</div></div>`;
+  let open='None';
+  if(item.open_position) open=item.open_position.direction+' at '+money(item.open_position.entry_price);
+  return `<div class="card"><h2>${item.title}</h2><span class="status ${item.status==='OK'?'':'error'}">${item.status}</span><div class="info">${item.message||''}</div><div class="info">Ticker: <b>${item.ticker}</b><br>UID: <b>${item.uid}</b><br>Candles: <b>${item.candles}</b></div><div class="signal ${signalClass(signal)}">${signal}</div><div class="info">${item.strategy.description||''}</div><div class="info selected"><b>Selected: ${item.selected_strategy}</b><br>${item.selection_reason||''}<br>Trades: <b>${stats.total||0}</b> | Winrate: <b>${stats.winrate||0}%</b><br>Winning: <b>${stats.profitable||0}</b> | Losing: <b>${stats.losing||0}</b><br>Net: <b>${money(stats.net)} RUB</b><br>Open position: <b>${open}</b></div><div class="strategy-box"><b>All strategies</b>${(item.strategy_selection||[]).map((r,i)=>`<div class="strategy-row ${r.is_selected?'selected':''}"><span>${r.is_selected?'* ':''}${i+1}. ${r.name}</span><span>${r.statistics.total} tr</span><span>${r.statistics.winrate}%</span><span class="${r.statistics.net>=0?'positive':'negative'}">${money(r.statistics.net)} RUB</span><span>DD ${money(r.drawdown)} RUB</span><span>${r.reason}</span></div>`).join('')}</div></div>`;
 }
 function renderFutures(data){document.getElementById('futures').innerHTML=data.futures.map(renderInstrumentCard).join('')}
 function renderShares(data){document.getElementById('shares').innerHTML=data.shares.map(renderInstrumentCard).join('')}
 function renderStatistics(s){
-  document.getElementById('statistics').innerHTML=`<div class="stat"><div class="stat-title">ÐÑÐµÐ³Ð¾ ÑÐ´ÐµÐ»Ð¾Ðº</div><div class="stat-value">${s.total}</div></div><div class="stat"><div class="stat-title">ÐÑÐ¸Ð±ÑÐ»ÑÐ½ÑÑ</div><div class="stat-value">${s.profitable}</div></div><div class="stat"><div class="stat-title">Ð£Ð±ÑÑÐ¾ÑÐ½ÑÑ</div><div class="stat-value">${s.losing}</div></div><div class="stat"><div class="stat-title">Winrate</div><div class="stat-value">${s.winrate}%</div></div><div class="stat"><div class="stat-title">ÐÐ¾ ÑÐ°ÑÑÐ¾Ð´Ð¾Ð²</div><div class="stat-value">${money(s.gross)} â½</div></div><div class="stat"><div class="stat-title">ÐÐ¾Ð¼Ð¸ÑÑÐ¸Ð¸</div><div class="stat-value">${money(s.commission)} â½</div></div><div class="stat"><div class="stat-title">ÐÐ°Ð»Ð¾Ð³</div><div class="stat-value">${money(s.tax)} â½</div></div><div class="stat"><div class="stat-title">Ð§ÐÐ¡Ð¢Ð«Ð Ð ÐÐÐ£ÐÐ¬Ð¢ÐÐ¢</div><div class="stat-value ${s.net>=0?'positive':'negative'}">${money(s.net)} â½</div></div>`;
+  document.getElementById('statistics').innerHTML=`<div class="stat"><div class="stat-title">Total trades</div><div class="stat-value">${s.total}</div></div><div class="stat"><div class="stat-title">Winning</div><div class="stat-value">${s.profitable}</div></div><div class="stat"><div class="stat-title">Losing</div><div class="stat-value">${s.losing}</div></div><div class="stat"><div class="stat-title">Winrate</div><div class="stat-value">${s.winrate}%</div></div><div class="stat"><div class="stat-title">Gross</div><div class="stat-value">${money(s.gross)} RUB</div></div><div class="stat"><div class="stat-title">Commissions</div><div class="stat-value">${money(s.commission)} RUB</div></div><div class="stat"><div class="stat-title">Tax</div><div class="stat-value">${money(s.tax)} RUB</div></div><div class="stat"><div class="stat-title">NET RESULT</div><div class="stat-value ${s.net>=0?'positive':'negative'}">${money(s.net)} RUB</div></div>`;
 }
 function renderHistory(data){
   let all=[];
   [...data.futures,...data.shares].forEach(x=>all=all.concat(x.history||[]));
   all.sort((a,b)=>new Date(b.exit_time)-new Date(a.exit_time));
   const c=document.getElementById('history');
-  if(!all.length){c.innerHTML='ÐÐ¾ÐºÐ° Ð·Ð°ÐºÑÑÑÑÑ ÑÐ´ÐµÐ»Ð¾Ðº Ð½ÐµÑ.';return}
-  let h='<table><thead><tr><th>ÐÐ½ÑÑÑÑÐ¼ÐµÐ½Ñ</th><th>ÐÐ°Ð¿Ñ.</th><th>ÐÑÐ¾Ð´</th><th>ÐÑÑÐ¾Ð´</th><th>Ð¦ÐµÐ½Ð° Ð²ÑÐ¾Ð´Ð°</th><th>Ð¦ÐµÐ½Ð° Ð²ÑÑÐ¾Ð´Ð°</th><th>ÐÑÐ¸ÑÐ¸Ð½Ð°</th><th>Ð ÐµÐ·ÑÐ»ÑÑÐ°Ñ</th><th>ÐÐ¾Ð¼Ð¸ÑÑÐ¸Ñ</th><th>ÐÐ°Ð»Ð¾Ð³</th><th>Ð§Ð¸ÑÑÑÐ¹</th></tr></thead><tbody>';
+  if(!all.length){c.innerHTML='No closed trades yet.';return}
+  let h='<table><thead><tr><th>Instrument</th><th>Dir</th><th>Entry</th><th>Exit</th><th>Entry price</th><th>Exit price</th><th>Reason</th><th>Result</th><th>Comm</th><th>Tax</th><th>Net</th></tr></thead><tbody>';
   all.slice(0,100).forEach(t=>{
     const n=Number(t.net_result||0);
     const commission=Number(t.buy_commission||0)+Number(t.sell_commission||0);
-    h+=`<tr><td>${t.title}</td><td>${t.direction}</td><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.entry_price}</td><td>${t.exit_price}</td><td>${t.exit_reason||'---'}</td><td>${money(t.gross_result)} â½</td><td>${money(commission)} â½</td><td>${money(t.tax)} â½</td><td class="${n>=0?'positive':'negative'}">${money(n)} â½</td></tr>`;
+    h+=`<tr><td>${t.title}</td><td>${t.direction}</td><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.entry_price}</td><td>${t.exit_price}</td><td>${t.exit_reason||'---'}</td><td>${money(t.gross_result)} RUB</td><td>${money(commission)} RUB</td><td>${money(t.tax)} RUB</td><td class="${n>=0?'positive':'negative'}">${money(n)} RUB</td></tr>`;
   });
   c.innerHTML=h+'</tbody></table>';
 }
@@ -1547,30 +1547,30 @@ function renderScreening(data){
   const passedEl=document.getElementById('screeningPassed');
   const rejectedEl=document.getElementById('screeningRejected');
   if(!data || data.error){
-    info.innerHTML='ÐÑÐ¸Ð±ÐºÐ°: '+(data && data.error ? data.error : 'Ð½ÐµÑ Ð´Ð°Ð½Ð½ÑÑ');
+    info.innerHTML='Error: '+(data && data.error ? data.error : 'no data');
     return;
   }
   const passedCount=data.passed_count||0;
   const rejectedCount=data.rejected_count||0;
-  const updatedAt=data.updated_at?new Date(data.updated_at).toLocaleString('ru-RU'):'â';
+  const updatedAt=data.updated_at?new Date(data.updated_at).toLocaleString('en-GB'):'--';
   if(passedCount===0){
-    info.innerHTML=`<b style="color:#ff6666">â ï¸ ÐÐ¸ Ð¾Ð´Ð½Ð° ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ Ð½Ðµ Ð¿ÑÐ¾ÑÐ»Ð° ÑÐ¸Ð»ÑÑÑ</b><br>ÐÑÐ¾Ð²ÐµÑÐµÐ½Ð¾ ${rejectedCount} ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°ÑÐ¸Ð¹ (Ð¸Ð½ÑÑÑÑÐ¼ÐµÐ½Ñ Ã ÑÐ°Ð¹Ð¼ÑÑÐµÐ¹Ð¼ Ã ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ).<br>ÐÑÐ¸ÑÐµÑÐ¸Ð¸: â¥15 ÑÐ´ÐµÐ»Ð¾Ðº, WR â¥40%, ÑÐ¸ÑÑÑÐ¹ Ð¿Ð»ÑÑ, P/DD â¥1.0.<br><span style="color:#8f99aa;font-size:12px">ÐÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾: ${updatedAt}</span>`;
+    info.innerHTML=`<b style="color:#ff6666">No strategy passed the filter</b><br>Checked ${rejectedCount} combinations (instrument x timeframe x strategy).<br>Criteria: >=15 trades, WR >=40%, net positive, P/DD >=1.0.<br><span style="color:#8f99aa;font-size:12px">Updated: ${updatedAt}</span>`;
     passedEl.innerHTML='';
   }else{
-    info.innerHTML=`<b style="color:#52e58a">â ÐÐ°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ°Ð±Ð¾ÑÐ¸Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ð¹: ${passedCount}</b> (Ð¾ÑÐºÐ»Ð¾Ð½ÐµÐ½Ð¾: ${rejectedCount})<br><span style="color:#8f99aa;font-size:12px">ÐÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾: ${updatedAt}. Ð¢Ð¾Ð¿-10 Ð¿Ð¾ P/DD:</span>`;
+    info.innerHTML=`<b style="color:#52e58a">Found working strategies: ${passedCount}</b> (rejected: ${rejectedCount})<br><span style="color:#8f99aa;font-size:12px">Updated: ${updatedAt}. Top-10 by P/DD:</span>`;
     let h='';
     data.passed.slice(0,10).forEach(r=>{
       h+=`<div class="screening-card">
         <div class="sc-title">${r.strategy}</div>
-        <div class="sc-sub">${r.instrument} Â· ${r.interval}</div>
+        <div class="sc-sub">${r.instrument} | ${r.interval}</div>
         <div class="screening-grid">
-          <div><span class="screening-label">Ð¡Ð´ÐµÐ»Ð¾Ðº:</span> <b>${r.trades}</b></div>
+          <div><span class="screening-label">Trades:</span> <b>${r.trades}</b></div>
           <div><span class="screening-label">WR:</span> <b>${r.winrate}%</b></div>
           <div><span class="screening-label">P/DD:</span> <b class="positive">${r.ratio}</b></div>
         </div>
         <div class="screening-grid-2">
-          <div><span class="screening-label">Ð§Ð¸ÑÑÑÐ¹:</span> <b class="positive">${money(r.net)} â½</b></div>
-          <div><span class="screening-label">DD:</span> <b>${money(r.drawdown)} â½</b></div>
+          <div><span class="screening-label">Net:</span> <b class="positive">${money(r.net)} RUB</b></div>
+          <div><span class="screening-label">DD:</span> <b>${money(r.drawdown)} RUB</b></div>
         </div>
       </div>`;
     });
@@ -1582,18 +1582,18 @@ function renderScreening(data){
       const netClass=(r.net||0)>=0?'positive':'negative';
       h+=`<div class="screening-card-rej">
         <div class="sc-title">${r.strategy}</div>
-        <div class="sc-sub">${r.instrument} Â· ${r.interval}</div>
+        <div class="sc-sub">${r.instrument} | ${r.interval}</div>
         <div class="sc-meta">
-          <span>Ð¡Ð´ÐµÐ»Ð¾Ðº: <b>${r.trades||0}</b></span> Â·
-          <span>WR: <b>${r.winrate||0}%</b></span> Â·
-          <span>Net: <b class="${netClass}">${money(r.net||0)} â½</b></span>
+          <span>Trades: <b>${r.trades||0}</b></span> |
+          <span>WR: <b>${r.winrate||0}%</b></span> |
+          <span>Net: <b class="${netClass}">${money(r.net||0)} RUB</b></span>
         </div>
-        <div class="sc-reason">${r.reason||'â'}</div>
+        <div class="sc-reason">${r.reason||'--'}</div>
       </div>`;
     });
     rejectedEl.innerHTML=h;
   }else if(rejectedEl){
-    rejectedEl.innerHTML='ÐÐµÑ Ð´Ð°Ð½Ð½ÑÑ.';
+    rejectedEl.innerHTML='No data.';
   }
 }
 async function saveRiskSettings(){
@@ -1609,8 +1609,8 @@ async function saveRiskSettings(){
   };
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const res=await r.json();
-  if(res.ok){alert('ÐÐ°ÑÑÑÐ¾Ð¹ÐºÐ¸ ÑÐ¾ÑÑÐ°Ð½ÐµÐ½Ñ. ÐÐµÑÐµÑÑÐ¸ÑÑÐ²Ð°Ñ...');loadData();}
-  else{alert('ÐÑÐ¸Ð±ÐºÐ°: '+res.error);}
+  if(res.ok){alert('Settings saved. Recalculating...');loadData();}
+  else{alert('Error: '+res.error);}
 }
 async function loadData(){
   try{
@@ -1619,7 +1619,7 @@ async function loadData(){
     if(data.error){console.error(data.error);return}
     renderFutures(data);renderShares(data);renderStatistics(data.statistics);renderHistory(data);
     if(data.risk_settings) renderRiskSettings(data.risk_settings);
-    document.getElementById('updated').textContent='ÐÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾: '+new Date(data.updated).toLocaleString('ru-RU');
+    document.getElementById('updated').textContent='Updated: '+new Date(data.updated).toLocaleString('en-GB');
     document.getElementById('positionSize').textContent=money(data.settings.position_size);
     document.getElementById('buyCommission').textContent=data.settings.buy_commission;
     document.getElementById('sellCommission').textContent=data.settings.sell_commission;
@@ -1628,14 +1628,14 @@ async function loadData(){
     document.getElementById('historyDays').textContent=data.settings.history_days;
     document.getElementById('strategiesCount').textContent=data.settings.strategies_count;
     document.getElementById('exitRule').textContent=data.settings.exit_rule;
-  }catch(e){console.error('ÐÑÐ¸Ð±ÐºÐ° Ð·Ð°Ð³ÑÑÐ·ÐºÐ¸:',e)}
+  }catch(e){console.error('Load error:',e)}
 }
 async function loadScreening(){
   try{
     const r=await fetch('/api/screening');
     const data=await r.json();
     renderScreening(data);
-  }catch(e){console.error('ÐÑÐ¸Ð±ÐºÐ° Ð·Ð°Ð³ÑÑÐ·ÐºÐ¸ ÑÐºÑÐ¸Ð½Ð¸Ð½Ð³Ð°:',e)}
+  }catch(e){console.error('Screening load error:',e)}
 }
 loadData();
 loadScreening();
