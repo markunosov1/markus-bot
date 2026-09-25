@@ -462,6 +462,151 @@ def macd_strategy(candles):
     return no_signal("Пересечения MACD на последней свече нет")
 
 
+def supertrend_strategy(candles):
+    if len(candles) < 15:
+        return no_signal("Недостаточно свечей для SuperTrend")
+
+    period = 10
+    multiplier = 2.5
+    window = candles[-period:]
+
+    # Расчёт ATR
+    trs = []
+    for i in range(1, len(window)):
+        high = window[i]["high"]
+        low = window[i]["low"]
+        prev_close = window[i-1]["close"]
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+
+    if not trs:
+        return no_signal("ATR не рассчитан")
+
+    atr = sum(trs) / len(trs)
+    last = candles[-1]
+    mid = (last["high"] + last["low"]) / 2
+    upper_band = mid + multiplier * atr
+    lower_band = mid - multiplier * atr
+
+    # Проверяем предыдущее состояние для определения смены
+    prev = candles[-2]
+    prev_mid = (prev["high"] + prev["low"]) / 2
+    prev_upper = prev_mid + multiplier * atr
+    prev_lower = prev_mid - multiplier * atr
+
+    # LONG: цена была ниже нижней полосы, стала выше
+    if prev["close"] < prev_lower and last["close"] > lower_band:
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": f"SuperTrend: цена пробила нижнюю полосу (ATR={atr:.2f}), тренд вверх"}
+
+    # SHORT: цена была выше верхней полосы, стала ниже
+    if prev["close"] > prev_upper and last["close"] < upper_band:
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": f"SuperTrend: цена пробила верхнюю полосу (ATR={atr:.2f}), тренд вниз"}
+
+    # Обычное трендовое движение
+    if last["close"] > lower_band and last["close"] < upper_band:
+        return no_signal(f"SuperTrend в зоне неопределённости: {lower_band:.2f}–{upper_band:.2f}")
+
+    return no_signal("SuperTrend без чёткого сигнала")
+
+def double_pattern_strategy(candles):
+    if len(candles) < 40:
+        return no_signal("Недостаточно свечей для Double Top/Bottom")
+
+    window = candles[-40:]
+    highs = [x["high"] for x in window]
+    lows = [x["low"] for x in window]
+    closes = [x["close"] for x in window]
+
+    # Ищем два локальных максимума/минимума
+    max_idx = highs.index(max(highs))
+    min_idx = lows.index(min(lows))
+
+    # Двойная вершина: первый максимум в начале, второй максимум в конце
+    first_half_high = max(highs[:20])
+    second_half_high = max(highs[20:])
+    first_half_low = min(lows[:20])
+    second_half_low = min(lows[20:])
+
+    tolerance = 0.015  # 1.5% допуск между уровнями
+
+    # Двойная вершина (SHORT)
+    if (abs(first_half_high - second_half_high) / first_half_high < tolerance
+            and closes[-1] < min(highs[10:30]) * 0.99):
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": f"Double Top: два максимума около {second_half_high:.2f} и пробой вниз"}
+
+    # Двойное дно (LONG)
+    if (abs(first_half_low - second_half_low) / first_half_low < tolerance
+            and closes[-1] > max(lows[10:30]) * 1.01):
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": f"Double Bottom: два минимума около {second_half_low:.2f} и пробой вверх"}
+
+    return no_signal("Double Top/Bottom не сформирован")
+
+def engulfing_strategy(candles):
+    if len(candles) < 10:
+        return no_signal("Недостаточно свечей для Engulfing")
+
+    prev = candles[-2]
+    last = candles[-1]
+    prev_body = abs(prev["close"] - prev["open"])
+    last_body = abs(last["close"] - last["open"])
+
+    if prev_body == 0 or last_body == 0:
+        return no_signal("Нет чёткого тела свечи")
+
+    prev_bullish = prev["close"] > prev["open"]
+    last_bullish = last["close"] > last["open"]
+
+    # Бычье поглощение: предыдущая красная, текущая зелёная, тело больше и перекрывает
+    if (not prev_bullish and last_bullish
+            and last_body > prev_body * 1.2
+            and last["open"] <= prev["close"] and last["close"] >= prev["open"]):
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": "Bullish Engulfing: зелёная свеча полностью поглотила предыдущую красную"}
+
+    # Медвежье поглощение: предыдущая зелёная, текущая красная
+    if (prev_bullish and not last_bullish
+            and last_body > prev_body * 1.2
+            and last["open"] >= prev["close"] and last["close"] <= prev["open"]):
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": "Bearish Engulfing: красная свеча полностью поглотила предыдущую зелёную"}
+
+    return no_signal("Engulfing не сформирован")
+
+def hammer_strategy(candles):
+    if len(candles) < 5:
+        return no_signal("Недостаточно свечей для Hammer")
+
+    last = candles[-1]
+    body = abs(last["close"] - last["open"])
+    lower_wick = min(last["open"], last["close"]) - last["low"]
+    upper_wick = last["high"] - max(last["open"], last["close"])
+    total_range = last["high"] - last["low"]
+
+    if total_range == 0 or body == 0:
+        return no_signal("Нет чёткой структуры свечи")
+
+    # Проверка тренда до свечи (последние 3 свечи падают/растут)
+    closes = [x["close"] for x in candles[-4:-1]]
+    downtrend = closes[0] > closes[1] > closes[2]
+    uptrend = closes[0] < closes[1] < closes[2]
+
+    # Молот (бычий разворот)
+    if downtrend and body < total_range * 0.35 and lower_wick >= body * 2 and upper_wick < body * 0.5:
+        return {"signal": "LONG", "direction": "Вверх",
+                "description": "Hammer: длинная нижняя тень после падения — покупатели откупили цену"}
+
+    # Перевёрнутый молот / падающая звезда (медвежий разворот)
+    if uptrend and body < total_range * 0.35 and upper_wick >= body * 2 and lower_wick < body * 0.5:
+        return {"signal": "SHORT", "direction": "Вниз",
+                "description": "Inverted Hammer: длинная верхняя тень после роста — продавцы вернули цену"}
+
+    return no_signal("Hammer/Inverted Hammer не сформирован")
+
+
 STRATEGIES = [
     {"name": "Твоя стратегия", "key": "user", "fn": user_strategy, "min_bars": 8},
     {"name": "EMA Trend", "key": "ema", "fn": ema_trend_strategy, "min_bars": 30},
@@ -469,8 +614,11 @@ STRATEGIES = [
     {"name": "RSI Reversal", "key": "rsi", "fn": rsi_strategy, "min_bars": 16},
     {"name": "MACD", "key": "macd", "fn": macd_strategy, "min_bars": 36},
     {"name": "Bollinger", "key": "bollinger", "fn": bollinger_strategy, "min_bars": 20},
+    {"name": "Hammer", "key": "hammer", "fn": hammer_strategy, "min_bars": 5},
+    {"name": "Engulfing", "key": "engulfing", "fn": engulfing_strategy, "min_bars": 10},
+    {"name": "Double Top/Bottom", "key": "double", "fn": double_pattern_strategy, "min_bars": 40},
+    {"name": "SuperTrend", "key": "supertrend", "fn": supertrend_strategy, "min_bars": 15},
 ]
-
 
 def calculate_commission(amount, percent):
     return amount * percent / 100.0
@@ -970,4 +1118,4 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", "5000"))
     log.info("MARKUS TRADE запускается на порту %s", port)
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", ьport=port, debug=False)
