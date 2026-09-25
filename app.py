@@ -1266,12 +1266,15 @@ def api_screening():
                 _SCREENING_CACHE["updated_at"] = None
         data = get_screening_cached()
         updated = _SCREENING_CACHE["updated_at"]
-        response = jsonify({
-    "updated_at": updated.isoformat() if updated else None,
-    **data,
-})
-response.headers["Content-Type"] = "application/json; charset=utf-8"
-return response
+        import json as _json
+        body = _json.dumps({
+            "updated_at": updated.isoformat() if updated else None,
+            **data,
+        }, ensure_ascii=False)
+        return app.response_class(
+            body,
+            mimetype="application/json; charset=utf-8"
+        )
     except Exception as exc:
         log.exception("Ошибка /api/screening")
         return jsonify({"error": str(exc)}), 500
