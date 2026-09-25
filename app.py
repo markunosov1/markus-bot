@@ -140,7 +140,6 @@ def find_active_future(prefix):
     candidates = []
     now = datetime.now(timezone.utc)
 
-    # Сначала используем полный список фьючерсов; FindInstrument — как fallback.
     for item in get_all_futures():
         if not isinstance(item, dict) or not matches_future(item, prefix):
             continue
@@ -523,7 +522,6 @@ def calculate_max_drawdown(trades):
 
 
 def build_strategy_history(candles, instrument, title, strategy_fn):
-    """Бэктест стратегии на ВСЕЙ доступной истории, а не только на 8 свечах."""
     min_bars = 8
     for s in STRATEGIES:
         if s["fn"] is strategy_fn:
@@ -593,7 +591,6 @@ def evaluate_all_strategies(candles, instrument, title):
         last_analysis = strategy["fn"](candles)
 
         if stats["total"] >= MIN_BACKTEST_TRADES:
-            # Прозрачный технический балл: чистая прибыль, winrate и просадка.
             score = (stats["net"] / (1.0 + drawdown)) * 100 + stats["winrate"] * 2
             eligible = True
             reason = "Есть минимум 3 закрытые сделки; учитываются чистый результат, проходимость и просадка."
@@ -810,7 +807,11 @@ def api_history():
 
 
 HTML = r"""
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Markus Trade</title>
 <style>
 *{box-sizing:border-box}
@@ -818,4 +819,12 @@ body{margin:0;background:linear-gradient(135deg,#07090d,#10141c);color:#fff;font
 .container{width:95%;max-width:1500px;margin:auto;padding:25px 0 50px}
 .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:25px}
 .logo{font-size:28px;font-weight:800;letter-spacing:1px}
-.logo span{color:#
+.logo span{color:#d7aa52}
+.updated{color:#8c96a8;font-size:13px}
+.section-title{margin:28px 0 14px;font-size:23px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.card{background:rgba(22,27,36,.95);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:20px;box-shadow:0 15px 50px rgba(0,0,0,.25)}
+.card h2{margin-top:0;font-size:20px}
+.status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;background:#193d2b;color:#66e29a}
+.error{background:#442020;color:#ff8585}
+.signal{margin-top:15px;padding:14px;border-radius:14px;background:#
