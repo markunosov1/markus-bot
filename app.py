@@ -47,11 +47,12 @@ CANDLE_INTERVALS = {
     "CANDLE_INTERVAL_DAY": "1 Ð´ÐµÐ½Ñ",
 }
 
+
 MAX_HISTORY_DAYS = {
-    "CANDLE_INTERVAL_5_MIN": 14,
-    "CANDLE_INTERVAL_15_MIN": 30,
-    "CANDLE_INTERVAL_HOUR": 90,
-    "CANDLE_INTERVAL_4_HOUR": 180,
+    "CANDLE_INTERVAL_5_MIN": 7,
+    "CANDLE_INTERVAL_15_MIN": 14,
+    "CANDLE_INTERVAL_HOUR": 30,
+    "CANDLE_INTERVAL_4_HOUR": 90,
     "CANDLE_INTERVAL_DAY": 365,
 }
 
@@ -348,6 +349,7 @@ def find_share(stock):
 
 
 def get_candles(instrument_uid, settings=None):
+    """Скачивает свечи с авторетраем: если T-Банк говорит 'период слишком большой' — уменьшаем."""
     if settings is None:
         settings = load_settings()
     now = datetime.now(timezone.utc)
@@ -355,22 +357,42 @@ def get_candles(instrument_uid, settings=None):
     if interval not in CANDLE_INTERVALS:
         interval = CANDLE_INTERVAL_DEFAULT
 
-    max_days = MAX_HISTORY_DAYS.get(interval, 60)
+    max_days = MAX_HISTORY_DAYS.get(interval, 30)
     requested_days = int(settings.get("history_days", HISTORY_DAYS_DEFAULT))
     actual_days = max(1, min(requested_days, max_days))
 
-    hours = actual_days * 24
-    start = now - timedelta(hours=hours)
-
-    data = api_post(CANDLES_URL, {
-        "from": start.isoformat(),
-        "to": now.isoformat(),
-        "interval": interval,
-        "instrumentId": instrument_uid,
-        "candleSourceType": "CANDLE_SOURCE_EXCHANGE",
-    })
-    candles = data.get("candles", [])
-    return candles if isinstance(candles, list) else []
+    # Пробуем уменьшать период, пока T-Банк не согласится
+    for attempt, days in enumerate([
+        actual_days,
+        max(1, actual_days // 2),
+        max(1, actual_days // 3),
+        max(1, actual_days // 5),
+        7, 5, 3, 2, 1,
+    ]):
+        hours = days * 24
+        start = now - timedelta(hours=hours)
+        try:
+            data = api_post(CANDLES_URL, {
+                "from": start.isoformat(),
+                "to": now.isoformat(),
+                "interval": interval,
+                "instrumentId": instrument_uid,
+                "candleSourceType": "CANDLE_SOURCE_EXCHANGE",
+            })
+            candles = data.get("candles", [])
+            if attempt > 0:
+                log.info("get_candles: уменьшили период до %d дней для %s (%s)",
+                         days, instrument_uid[:8], interval)
+            return candles if isinstance(candles, list) else []
+        except RuntimeError as exc:
+            msg = str(exc)
+            # Если ошибка про "maximum request period" — пробуем меньший период
+            if "maximum request period" in msg or "30014" in msg:
+                continue
+            # Другая ошибка — пробрасываем наверх
+            raise
+    log.warning("get_candles: не удалось получить свечи для %s даже за 1 день", instrument_uid[:8])
+    return []
 
 
 def normalize_candles(candles):
@@ -1052,18 +1074,22 @@ def screen_strategies_for_instrument(instrument, title, instrument_code):
         temp_settings["candle_interval"] = interval
         temp_settings["history_days"] = max_days
 
-        candles_raw = get_candles(instrument["instrument_uid"], temp_settings)
-        candles = normalize_candles(candles_raw)
+        try:
+    candles_raw = get_candles(instrument["instrument_uid"], temp_settings)
+    candles = normalize_candles(candles_raw)
+except Exception as exc:
+    log.warning("Ошибка получения свечей %s/%s: %s", title, interval_label, exc)
+    candles = []
         if len(candles) < 40:
-            rejected.append({
-                "instrument": title, "ticker": instrument.get("ticker", "—"),
-                "interval": interval_label, "interval_key": interval,
-                "strategy": "—", "strategy_key": "—",
-                "trades": 0, "winrate": 0, "net": 0, "drawdown": 0, "ratio": 0,
-                "candles": len(candles),
-                "reason": f"мало свечей ({len(candles)})",
-            })
-            continue
+    rejected.append({
+        "instrument": title, "ticker": instrument.get("ticker", "—"),
+        "interval": interval_label, "interval_key": interval,
+        "strategy": "—", "strategy_key": "—",
+        "trades": 0, "winrate": 0, "net": 0, "drawdown": 0, "ratio": 0,
+        "candles": len(candles),
+        "reason": f"мало свечей ({len(candles)})",
+    })
+    continue
 
         for strategy in STRATEGIES:
             trades, _ = build_strategy_history(
