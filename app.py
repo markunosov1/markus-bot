@@ -14,9 +14,6 @@ import requests
 import urllib3
 from flask import Flask, jsonify, render_template_string
 
-# ============================================================
-# ПРИНУДИТЕЛЬНАЯ UTF-8 КОДИРОВКА ДЛЯ STDOUT/STDERR
-# ============================================================
 try:
     if sys.stdout.encoding is None or sys.stdout.encoding.lower() != "utf-8":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -25,9 +22,6 @@ try:
 except Exception:
     pass
 
-# ============================================================
-# КОНСТАНТЫ
-# ============================================================
 APP_NAME = "Markus Trade"
 API_BASE = "https://invest-public-api.tbank.ru/rest"
 FIND_INSTRUMENT_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
@@ -48,9 +42,6 @@ TAX_PERCENT = 13.0
 HISTORY_FILE = "trade_history.json"
 MIN_BACKTEST_TRADES = 3
 
-# ============================================================
-# WARNINGS И ЛОГИРОВАНИЕ
-# ============================================================
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore")
 
@@ -61,9 +52,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("MARKUS_TRADE")
 
-# ============================================================
-# FLASK
-# ============================================================
 app = Flask(__name__)
 try:
     app.json.ensure_ascii = False
@@ -73,9 +61,7 @@ except Exception:
     except Exception:
         pass
 
-# ============================================================
-# РАБОТА С API
-# ============================================================
+
 def get_token():
     for name in ("TINKOFF_TOKEN", "TINVEST_TOKEN", "T_BANK_TOKEN", "API_TOKEN", "TOKEN"):
         value = os.environ.get(name)
@@ -138,9 +124,7 @@ def quotation_to_float(value):
     except Exception:
         return 0.0
 
-# ============================================================
-# ФЬЮЧЕРСЫ
-# ============================================================
+
 def get_all_futures():
     for status in ("INSTRUMENT_STATUS_BASE", "INSTRUMENT_STATUS_ALL"):
         try:
@@ -244,9 +228,7 @@ def find_active_future(prefix):
     candidates.sort(key=lambda x: x.get("last_trade") or datetime.max.replace(tzinfo=timezone.utc))
     return candidates[0]
 
-# ============================================================
-# АКЦИИ
-# ============================================================
+
 STOCKS = [
     {"code": "SBER", "title": "Сбербанк", "emoji": "🏦", "queries": ["SBER", "Сбербанк"]},
     {"code": "ROSN", "title": "Роснефть", "emoji": "🛢️", "queries": ["ROSN", "Роснефть"]},
@@ -305,9 +287,7 @@ def find_share(stock):
     exact = [x for x in candidates if x["ticker"].upper() == stock["code"]]
     return exact[0] if exact else candidates[0]
 
-# ============================================================
-# СВЕЧИ
-# ============================================================
+
 def get_candles(instrument_uid):
     now = datetime.now(timezone.utc)
     start = now - timedelta(hours=HISTORY_HOURS)
@@ -343,9 +323,7 @@ def normalize_candles(candles):
     result.sort(key=lambda x: x["time"])
     return result
 
-# ============================================================
-# ИНДИКАТОРЫ
-# ============================================================
+
 def ema(values, period):
     if len(values) < period:
         return None
@@ -361,9 +339,7 @@ def sma(values, period):
         return None
     return sum(values[-period:]) / period
 
-# ============================================================
-# СТРАТЕГИИ
-# ============================================================
+
 def no_signal(description="Сигнал не сформирован"):
     return {"signal": "Нет сигналов", "direction": "—", "description": description}
 
@@ -495,9 +471,7 @@ STRATEGIES = [
     {"name": "Bollinger", "key": "bollinger", "fn": bollinger_strategy, "min_bars": 20},
 ]
 
-# ============================================================
-# РАСЧЁТ РЕЗУЛЬТАТОВ
-# ============================================================
+
 def calculate_commission(amount, percent):
     return amount * percent / 100.0
 
@@ -561,11 +535,8 @@ def calculate_max_drawdown(trades):
         max_dd = min(max_dd, equity - peak)
     return round(abs(max_dd), 2)
 
-# ============================================================
-# БЭКТЕСТ
-# ============================================================
+
 def build_strategy_history(candles, instrument, title, strategy_fn):
-    """Бэктест стратегии на ВСЕЙ доступной истории."""
     min_bars = 8
     for s in STRATEGIES:
         if s["fn"] is strategy_fn:
@@ -694,9 +665,7 @@ def analyze_strategy(candles):
     _, best, _ = evaluate_all_strategies(candles, "instrument", "instrument")
     return strategy_signal_from_best(candles, best)
 
-# ============================================================
-# ИСТОРИЯ СДЕЛОК
-# ============================================================
+
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return []
@@ -716,9 +685,7 @@ def save_history(history):
     except Exception as exc:
         log.error("Ошибка сохранения истории: %s", exc)
 
-# ============================================================
-# АНАЛИЗ ИНСТРУМЕНТА
-# ============================================================
+
 def base_result(kind, code, title, emoji):
     return {
         "type": kind, "prefix": code, "title": title, "emoji": emoji,
@@ -781,9 +748,7 @@ def get_share_status(stock):
         result["message"] = str(exc)
         return result
 
-# ============================================================
-# СБОР ДАННЫХ
-# ============================================================
+
 def collect_data():
     futures = [
         get_future_status("CR", "Юань", "¥"),
@@ -830,3 +795,179 @@ def collect_data():
         "last_signal": last_signal,
         "statistics": total_statistics,
         "settings": {
+            "position_size": POSITION_SIZE_RUBLES,
+            "buy_commission": BUY_COMMISSION_PERCENT,
+            "sell_commission": SELL_COMMISSION_PERCENT,
+            "tax": TAX_PERCENT,
+            "candle_interval": "4 часа",
+            "history_days": HISTORY_HOURS // 24,
+            "exit_rule": "Противоположный сигнал",
+            "strategies_count": len(STRATEGIES),
+        },
+    }
+
+
+@app.route("/api/status")
+def api_status():
+    try:
+        return jsonify(collect_data())
+    except Exception as exc:
+        log.exception("Ошибка /api/status")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/history")
+def api_history():
+    history = load_history()
+    return jsonify({"count": len(history), "history": history})
+    
+HTML = r"""
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Markus Trade</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(135deg,#07090d,#10141c);color:#fff;font-family:Arial,sans-serif;min-height:100vh}
+.container{width:95%;max-width:1500px;margin:auto;padding:25px 0 50px}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:25px}
+.logo{font-size:28px;font-weight:800;letter-spacing:1px}
+.logo span{color:#d7aa52}
+.updated{color:#8c96a8;font-size:13px}
+.section-title{margin:28px 0 14px;font-size:23px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.card{background:rgba(22,27,36,.95);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:20px;box-shadow:0 15px 50px rgba(0,0,0,.25)}
+.card h2{margin-top:0;font-size:20px}
+.status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;background:#193d2b;color:#66e29a}
+.error{background:#442020;color:#ff8585}
+.signal{margin-top:15px;padding:14px;border-radius:14px;background:#111720;font-size:18px;font-weight:bold}
+.long{color:#52e58a}
+.short{color:#ff6666}
+.none{color:#9ca5b4}
+.info{margin-top:12px;color:#aab3c2;font-size:13px;line-height:1.6}
+.selected{border-left:3px solid #d7aa52;padding-left:9px}
+.strategy-box{margin-top:15px;background:#0d1219;border-radius:12px;padding:12px;font-size:12px;overflow:auto}
+.strategy-row{display:grid;grid-template-columns:1.4fr .7fr .6fr .9fr .8fr 1.5fr;gap:7px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);color:#b8c0cc;min-width:850px}
+.strategy-row:last-child{border-bottom:0}
+.positive{color:#52e58a;font-weight:bold}
+.negative{color:#ff6666;font-weight:bold}
+.statistics,.history{margin-top:25px}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.stat{background:#111720;padding:16px;border-radius:14px}
+.stat-title{font-size:12px;color:#8f99aa;margin-bottom:7px}
+.stat-value{font-size:20px;font-weight:bold}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:900px}
+th,td{padding:11px;border-bottom:1px solid rgba(255,255,255,.07);text-align:left;font-size:13px}
+th{color:#9ca5b4;font-weight:normal}
+.settings{margin-top:20px;color:#858fa0;font-size:13px;line-height:1.7}
+button{margin-top:20px;border:none;border-radius:12px;padding:12px 20px;background:#d7aa52;color:#111;font-weight:bold;cursor:pointer}
+@media(max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
+@media(max-width:700px){.grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.header{align-items:flex-start;gap:10px;flex-direction:column}}
+</style></head><body><div class="container">
+<div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">Загрузка...</div></div>
+
+<div class="section-title">📊 ФЬЮЧЕРСЫ — 4 ЧАСА</div><div class="grid" id="futures"></div>
+
+<div class="section-title">📈 АКЦИИ — 4 ЧАСА</div><div class="grid" id="shares"></div>
+
+<div class="card statistics"><h2>📊 Общая статистика</h2><div class="stats-grid" id="statistics"></div></div>
+
+<div class="card history"><h2>📜 История сделок</h2><div class="table-wrap" id="history"></div></div>
+
+<div class="card settings"><h2>⚙️ Настройки</h2>
+Размер виртуальной позиции: <b id="positionSize">—</b> ₽<br>
+Комиссия покупки: <b id="buyCommission">—</b>%<br>
+Комиссия продажи: <b id="sellCommission">—</b>%<br>
+Налог: <b id="tax">—</b>%<br>
+Таймфрейм: <b id="interval">—</b><br>
+История: <b id="historyDays">—</b> дней<br>
+Стратегий: <b id="strategiesCount">—</b><br>
+Выход из сделки: <b id="exitRule">—</b><br>
+<button onclick="loadData()">🔄 Обновить сейчас</button></div></div>
+
+<script>
+function money(v){return Number(v||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function signalClass(s){return s==='LONG'?'long':s==='SHORT'?'short':'none'}
+
+function renderInstrumentCard(item){
+  const signal=item.strategy.signal;
+  const stats=item.statistics||{};
+  let open='Нет';
+  if(item.open_position) open=item.open_position.direction+' от '+money(item.open_position.entry_price);
+  return `<div class="card"><h2>${item.emoji} ${item.title}</h2><span class="status ${item.status==='OK'?'':'error'}">${item.status}</span><div class="info">${item.message||''}</div><div class="info">Тикер: <b>${item.ticker}</b><br>UID: <b>${item.uid}</b><br>4H-свечей: <b>${item.candles}</b></div><div class="signal ${signalClass(signal)}">${signal}</div><div class="info">${item.strategy.description||''}</div><div class="info selected"><b>🤖 Выбрана стратегия: ${item.selected_strategy}</b><br>${item.selection_reason||''}<br>Закрытых сделок: <b>${stats.total||0}</b> · Проходимость: <b>${stats.winrate||0}%</b><br>Прибыльных: <b>${stats.profitable||0}</b> · Убыточных: <b>${stats.losing||0}</b><br>Чистый результат: <b>${money(stats.net)} ₽</b><br>Открытая позиция: <b>${open}</b></div><div class="strategy-box"><b>🔬 Все стратегии — почему выбрана именно эта</b>${(item.strategy_selection||[]).map((r,i)=>`<div class="strategy-row ${r.is_selected?'selected':''}"><span>${r.is_selected?'⭐ ':''}${i+1}. ${r.name}</span><span>${r.statistics.total} сделок</span><span>${r.statistics.winrate}%</span><span class="${r.statistics.net>=0?'positive':'negative'}">${money(r.statistics.net)} ₽</span><span>DD ${money(r.drawdown)} ₽</span><span>${r.reason}</span></div>`).join('')}</div></div>`;
+}
+
+function renderFutures(data){document.getElementById('futures').innerHTML=data.futures.map(renderInstrumentCard).join('')}
+function renderShares(data){document.getElementById('shares').innerHTML=data.shares.map(renderInstrumentCard).join('')}
+
+function renderStatistics(s){
+  document.getElementById('statistics').innerHTML=`<div class="stat"><div class="stat-title">Всего сделок</div><div class="stat-value">${s.total}</div></div><div class="stat"><div class="stat-title">Прибыльных</div><div class="stat-value">${s.profitable}</div></div><div class="stat"><div class="stat-title">Убыточных</div><div class="stat-value">${s.losing}</div></div><div class="stat"><div class="stat-title">Проходимость</div><div class="stat-value">${s.winrate}%</div></div><div class="stat"><div class="stat-title">До расходов</div><div class="stat-value">${money(s.gross)} ₽</div></div><div class="stat"><div class="stat-title">Комиссии</div><div class="stat-value">${money(s.commission)} ₽</div></div><div class="stat"><div class="stat-title">Налог</div><div class="stat-value">${money(s.tax)} ₽</div></div><div class="stat"><div class="stat-title">ЧИСТЫЙ РЕЗУЛЬТАТ</div><div class="stat-value ${s.net>=0?'positive':'negative'}">${money(s.net)} ₽</div></div>`;
+}
+
+function renderHistory(data){
+  let all=[];
+  [...data.futures,...data.shares].forEach(x=>all=all.concat(x.history||[]));
+  all.sort((a,b)=>new Date(b.exit_time)-new Date(a.exit_time));
+  const c=document.getElementById('history');
+  if(!all.length){c.innerHTML='Пока закрытых сделок нет.';return}
+  let h='<table><thead><tr><th>Инструмент</th><th>Направление</th><th>Вход</th><th>Выход</th><th>Цена входа</th><th>Цена выхода</th><th>Результат</th><th>Комиссия</th><th>Налог</th><th>Чистый результат</th></tr></thead><tbody>';
+  all.slice(0,100).forEach(t=>{
+    const n=Number(t.net_result||0);
+    const commission=Number(t.buy_commission||0)+Number(t.sell_commission||0);
+    h+=`<tr><td>${t.title}</td><td>${t.direction}</td><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.entry_price}</td><td>${t.exit_price}</td><td>${money(t.gross_result)} ₽</td><td>${money(commission)} ₽</td><td>${money(t.tax)} ₽</td><td class="${n>=0?'positive':'negative'}">${money(n)} ₽</td></tr>`;
+  });
+  c.innerHTML=h+'</tbody></table>';
+}
+
+async function loadData(){
+  try{
+    const response=await fetch('/api/status');
+    const data=await response.json();
+    if(data.error){console.error(data.error);return}
+    renderFutures(data);renderShares(data);renderStatistics(data.statistics);renderHistory(data);
+    document.getElementById('updated').textContent='Обновлено: '+new Date(data.updated).toLocaleString('ru-RU');
+    document.getElementById('positionSize').textContent=money(data.settings.position_size);
+    document.getElementById('buyCommission').textContent=data.settings.buy_commission;
+    document.getElementById('sellCommission').textContent=data.settings.sell_commission;
+    document.getElementById('tax').textContent=data.settings.tax;
+    document.getElementById('interval').textContent=data.settings.candle_interval;
+    document.getElementById('historyDays').textContent=data.settings.history_days;
+    document.getElementById('strategiesCount').textContent=data.settings.strategies_count;
+    document.getElementById('exitRule').textContent=data.settings.exit_rule;
+  }catch(e){console.error('Ошибка загрузки:',e)}
+}
+loadData();setInterval(loadData,60000);
+</script></body></html>
+"""
+
+
+@app.route("/")
+def index():
+    return render_template_string(HTML)
+
+
+def background_monitor():
+    while True:
+        try:
+            data = collect_data()
+            log.info("MARKUS TRADE | обновление данных")
+            for item in data["futures"] + data["shares"]:
+                log.info("%s | ticker=%s | candles=%s | strategy=%s | signal=%s",
+                         item["title"], item["ticker"], item["candles"],
+                         item["selected_strategy"], item["strategy"]["signal"])
+            stats = data["statistics"]
+            log.info("СТАТИСТИКА | сделок=%s | winrate=%s%% | чистый=%s ₽",
+                     stats["total"], stats["winrate"], stats["net"])
+        except Exception as exc:
+            log.exception("Ошибка фонового мониторинга: %s", exc)
+        time.sleep(UPDATE_SECONDS)
+if __name__ == "__main__":
+    if not get_token():
+        log.error("ВНИМАНИЕ: API-токен не найден!")
+    else:
+        log.info("API-токен найден.")
+
+    threading.Thread(target=background_monitor, daemon=True).start()
+
+    port = int(os.environ.get("PORT", "5000"))
+    log.info("MARKUS TRADE запускается на порту %s", port)
+    app.run(host="0.0.0.0", port=port, debug=False)
