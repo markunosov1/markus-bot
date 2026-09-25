@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 import urllib3
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template
 
 APP_NAME = "Markus Trade"
 API_BASE = "https://invest-public-api.tbank.ru/rest"
@@ -806,25 +806,14 @@ def api_history():
     return jsonify({"count": len(history), "history": history})
 
 
-HTML = r"""
-<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Markus Trade</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;background:linear-gradient(135deg,#07090d,#10141c);color:#fff;font-family:Arial,sans-serif;min-height:100vh}
-.container{width:95%;max-width:1500px;margin:auto;padding:25px 0 50px}
-.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:25px}
-.logo{font-size:28px;font-weight:800;letter-spacing:1px}
-.logo span{color:#d7aa52}
-.updated{color:#8c96a8;font-size:13px}
-.section-title{margin:28px 0 14px;font-size:23px}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
-.card{background:rgba(22,27,36,.95);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:20px;box-shadow:0 15px 50px rgba(0,0,0,.25)}
-.card h2{margin-top:0;font-size:20px}
-.status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;background:#193d2b;color:#66e29a}
-.error{background:#442020;color:#ff8585}
-.signal{margin-top:15px;padding:14px;border-radius:14px;background:#
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+def background_monitor():
+    while True:
+        try:
+            data = collect_data()
+            log.info("MARKUS TRADE | обновление данных")
+            for item in data["futures"] + data["shares
