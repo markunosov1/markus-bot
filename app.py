@@ -17,12 +17,16 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask, jsonify, render_template_string, request
 
 try:
-    if sys.stdout.encoding is None or sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    if sys.stderr.encoding is None or sys.stderr.encoding.lower() != "utf-8":
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    sys.stdout = io.TextIOWrapper(
+        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
+    sys.stderr = io.TextIOWrapper(
+        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
 except Exception:
     pass
+
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 APP_NAME = "Markus Trade"
 API_BASE = "https://invest-public-api.tbank.ru/rest"
@@ -1303,10 +1307,29 @@ def background_monitor():
         time.sleep(UPDATE_SECONDS)
 
 
-try:
-    init_db()
-except Exception as _exc:
-    log.error("Не удалось инициализировать БД при старте: %s", _exc)
+_BACKGROUND_STARTED = False
+_BACKGROUND_LOCK = threading.Lock()
+
+
+def _start_background_if_needed():
+    global _BACKGROUND_STARTED
+    with _BACKGROUND_LOCK:
+        if _BACKGROUND_STARTED:
+            return
+        _BACKGROUND_STARTED = True
+    try:
+        init_db()
+    except Exception as exc:
+        log.error("Ошибка инициализации БД: %s", exc)
+    try:
+        t = threading.Thread(target=background_monitor, daemon=True)
+        t.start()
+        log.info("Фоновый мониторинг запущен (thread=%s)", t.name)
+    except Exception as exc:
+        log.error("Не удалось запустить фоновый мониторинг: %s", exc)
+
+
+_start_background_if_needed()
 
 
 HTML = r"""
@@ -1565,11 +1588,7 @@ if __name__ == "__main__":
         log.error("ВНИМАНИЕ: API-токен не найден!")
     else:
         log.info("API-токен найден.")
-    try:
-        init_db()
-    except Exception as exc:
-        log.error("Ошибка инициализации БД: %s", exc)
-    threading.Thread(target=background_monitor, daemon=True).start()
+    _start_background_if_needed()
     port = int(os.environ.get("PORT", "5000"))
     log.info("MARKUS TRADE запускается на порту %s", port)
     app.run(host="0.0.0.0", port=port, debug=False)
