@@ -53,6 +53,25 @@ CANDLE_INTERVALS = {
     "CANDLE_INTERVAL_DAY": "1 день",
 }
 
+# Максимальная глубина истории в днях для каждого интервала
+# (ограничения T-Банка по максимальному окну запроса)
+MAX_HISTORY_DAYS = {
+    "CANDLE_INTERVAL_5_MIN": 14,
+    "CANDLE_INTERVAL_15_MIN": 30,
+    "CANDLE_INTERVAL_HOUR": 90,
+    "CANDLE_INTERVAL_4_HOUR": 180,
+    "CANDLE_INTERVAL_DAY": 365,
+}
+
+# Значение по умолчанию для каждого интервала (авто-подстановка)
+DEFAULT_HISTORY_FOR_INTERVAL = {
+    "CANDLE_INTERVAL_5_MIN": 7,
+    "CANDLE_INTERVAL_15_MIN": 14,
+    "CANDLE_INTERVAL_HOUR": 60,
+    "CANDLE_INTERVAL_4_HOUR": 60,
+    "CANDLE_INTERVAL_DAY": 60,
+}
+
 UPDATE_SECONDS = 300
 POSITION_SIZE_RUBLES = 100000.0
 BUY_COMMISSION_PERCENT = 0.10
@@ -287,6 +306,7 @@ def find_active_future(prefix):
 
     candidates.sort(key=lambda x: x.get("last_trade") or datetime.max.replace(tzinfo=timezone.utc))
     return candidates[0]
+
 # ============================================================
 # АКЦИИ
 # ============================================================
@@ -347,17 +367,23 @@ def find_share(stock):
 
 
 # ============================================================
-# СВЕЧИ
+# СВЕЧИ (с автоматическим ограничением глубины по таймфрейму)
 # ============================================================
 def get_candles(instrument_uid, settings=None):
     if settings is None:
         settings = load_settings()
     now = datetime.now(timezone.utc)
-    hours = int(settings.get("history_days", HISTORY_DAYS_DEFAULT)) * 24
-    start = now - timedelta(hours=hours)
     interval = settings.get("candle_interval", CANDLE_INTERVAL_DEFAULT)
     if interval not in CANDLE_INTERVALS:
         interval = CANDLE_INTERVAL_DEFAULT
+
+    # Автоматически ограничиваем глубину истории в зависимости от таймфрейма
+    max_days = MAX_HISTORY_DAYS.get(interval, 60)
+    requested_days = int(settings.get("history_days", HISTORY_DAYS_DEFAULT))
+    actual_days = max(1, min(requested_days, max_days))
+
+    hours = actual_days * 24
+    start = now - timedelta(hours=hours)
 
     data = api_post(CANDLES_URL, {
         "from": start.isoformat(),
@@ -662,6 +688,7 @@ STRATEGIES = [
     {"name": "Double Top/Bottom", "key": "double", "fn": double_pattern_strategy, "min_bars": 40},
     {"name": "SuperTrend", "key": "supertrend", "fn": supertrend_strategy, "min_bars": 15},
 ]
+
 # ============================================================
 # РАСЧЁТ РЕЗУЛЬТАТОВ
 # ============================================================
@@ -1042,6 +1069,7 @@ def get_share_status(stock, settings):
         log.exception("Ошибка акции %s", stock["title"])
         result["message"] = str(exc)
         return result
+
 # ============================================================
 # СБОР ДАННЫХ
 # ============================================================
@@ -1138,10 +1166,14 @@ def api_settings():
                 current[key] = data[key]
         if current.get("candle_interval") not in CANDLE_INTERVALS:
             current["candle_interval"] = CANDLE_INTERVAL_DEFAULT
+        # Автоматическое ограничение глубины для выбранного интервала
+        interval_now = current.get("candle_interval", CANDLE_INTERVAL_DEFAULT)
+        max_days = MAX_HISTORY_DAYS.get(interval_now, 60)
         try:
-            current["history_days"] = max(5, min(365, int(current.get("history_days", 60))))
+            days = int(current.get("history_days", 60))
         except Exception:
-            current["history_days"] = 60
+            days = 60
+        current["history_days"] = max(5, min(days, max_days))
         save_settings(current)
         return jsonify({"ok": True, "settings": current})
     except Exception as exc:
@@ -1230,7 +1262,7 @@ input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color
 <h2>⚙️ Управление бэктестом</h2>
 <div class="info">
 <b>Таймфрейм:</b><br>
-<select id="intervalSelect" style="width:100%">
+<select id="intervalSelect" style="width:100%" onchange="onIntervalChange()">
 <option value="CANDLE_INTERVAL_5_MIN">5 минут</option>
 <option value="CANDLE_INTERVAL_15_MIN">15 минут</option>
 <option value="CANDLE_INTERVAL_HOUR">1 час</option>
@@ -1239,8 +1271,9 @@ input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color
 </select>
 <br><br>
 <b>Глубина истории (дней):</b><br>
-<input type="number" id="historyDaysInput" min="5" max="365" step="5" style="width:100%">
-<br><br>
+<input type="number" id="historyDaysInput" min="1" max="180" step="1" style="width:100%">
+<div style="font-size:11px;color:#7a8394;margin-top:4px" id="historyHint"></div>
+<br>
 <b>🛡️ Риск-менеджмент</b><br><br>
 <label><input type="checkbox" id="useSL"> Стоп-лосс</label>
 <input type="number" id="slMult" step="0.1" min="0.5" style="width:70px"> × ATR<br>
@@ -1275,6 +1308,44 @@ input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color
 function money(v){return Number(v||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function signalClass(s){return s==='LONG'?'long':s==='SHORT'?'short':'none'}
 
+const MAX_HISTORY_DAYS_JS = {
+  "CANDLE_INTERVAL_5_MIN": 14,
+  "CANDLE_INTERVAL_15_MIN": 30,
+  "CANDLE_INTERVAL_HOUR": 90,
+  "CANDLE_INTERVAL_4_HOUR": 180,
+  "CANDLE_INTERVAL_DAY": 365,
+};
+const DEFAULT_HISTORY_FOR_INTERVAL_JS = {
+  "CANDLE_INTERVAL_5_MIN": 7,
+  "CANDLE_INTERVAL_15_MIN": 14,
+  "CANDLE_INTERVAL_HOUR": 60,
+  "CANDLE_INTERVAL_4_HOUR": 60,
+  "CANDLE_INTERVAL_DAY": 60,
+};
+const INTERVAL_LABELS = {
+  "CANDLE_INTERVAL_5_MIN": "5 минут",
+  "CANDLE_INTERVAL_15_MIN": "15 минут",
+  "CANDLE_INTERVAL_HOUR": "1 час",
+  "CANDLE_INTERVAL_4_HOUR": "4 часа",
+  "CANDLE_INTERVAL_DAY": "1 день",
+};
+
+function updateHistoryHint(interval) {
+  const hint = document.getElementById('historyHint');
+  const maxDays = MAX_HISTORY_DAYS_JS[interval] || 60;
+  hint.textContent = 'Максимум для ' + (INTERVAL_LABELS[interval] || interval) + ': ' + maxDays + ' дней';
+}
+
+function onIntervalChange() {
+  const interval = document.getElementById('intervalSelect').value;
+  const hdInput = document.getElementById('historyDaysInput');
+  const maxDays = MAX_HISTORY_DAYS_JS[interval] || 60;
+  const defDays = DEFAULT_HISTORY_FOR_INTERVAL_JS[interval] || 60;
+  hdInput.max = maxDays;
+  hdInput.value = defDays;
+  updateHistoryHint(interval);
+}
+
 function renderInstrumentCard(item){
   const signal=item.strategy.signal;
   const stats=item.statistics||{};
@@ -1304,8 +1375,11 @@ function renderHistory(data){
 function renderRiskSettings(s){
   const sel = document.getElementById('intervalSelect');
   if (sel && s.candle_interval) sel.value = s.candle_interval;
+  const intervalNow = s.candle_interval || 'CANDLE_INTERVAL_4_HOUR';
   const hd = document.getElementById('historyDaysInput');
-  if (hd && s.history_days) hd.value = s.history_days;
+  hd.max = MAX_HISTORY_DAYS_JS[intervalNow] || 60;
+  if (s.history_days) hd.value = s.history_days;
+  updateHistoryHint(intervalNow);
   document.getElementById('useSL').checked = !!s.use_stop_loss;
   document.getElementById('slMult').value = s.sl_atr_mult;
   document.getElementById('useTP').checked = !!s.use_take_profit;
@@ -1383,7 +1457,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     log.info("MARKUS TRADE запускается на порту %s", port)
     app.run(host="0.0.0.0", port=port, debug=False)
-
 
 
 
