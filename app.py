@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 import os
 import sys
 import io
@@ -13,7 +12,10 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 import urllib3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from flask import Flask, jsonify, render_template_string, request
+
 
 # ============================================================
 # UTF-8 ДЛЯ STDOUT/STDERR
@@ -26,11 +28,13 @@ try:
 except Exception:
     pass
 
+
 # ============================================================
 # КОНСТАНТЫ
 # ============================================================
 APP_NAME = "Markus Trade"
 API_BASE = "https://invest-public-api.tbank.ru/rest"
+
 FIND_INSTRUMENT_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument"
 FUTURES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
 SHARES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Shares"
@@ -38,25 +42,22 @@ CANDLES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.MarketDataServi
 
 REQUEST_TIMEOUT = 30
 
-# Таймфреймы
 CANDLE_INTERVAL_DEFAULT = "CANDLE_INTERVAL_4_HOUR"
 HISTORY_DAYS_DEFAULT = 60
 
 CANDLE_INTERVALS = {
-    "CANDLE_INTERVAL_5_MIN":  "5 минут",
+    "CANDLE_INTERVAL_5_MIN": "5 минут",
     "CANDLE_INTERVAL_15_MIN": "15 минут",
-    "CANDLE_INTERVAL_HOUR":   "1 час",
+    "CANDLE_INTERVAL_HOUR": "1 час",
     "CANDLE_INTERVAL_4_HOUR": "4 часа",
-    "CANDLE_INTERVAL_DAY":    "1 день",
+    "CANDLE_INTERVAL_DAY": "1 день",
 }
 
 UPDATE_SECONDS = 300
-
 POSITION_SIZE_RUBLES = 100000.0
 BUY_COMMISSION_PERCENT = 0.10
 SELL_COMMISSION_PERCENT = 0.10
 TAX_PERCENT = 13.0
-
 HISTORY_FILE = "trade_history.json"
 SETTINGS_FILE = "settings.json"
 MIN_BACKTEST_TRADES = 3
@@ -72,6 +73,7 @@ DEFAULT_SETTINGS = {
     "breakeven_trigger_atr": 2.0,
 }
 
+
 # ============================================================
 # WARNINGS И ЛОГИРОВАНИЕ
 # ============================================================
@@ -85,6 +87,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("MARKUS_TRADE")
 
+
 # ============================================================
 # FLASK
 # ============================================================
@@ -96,6 +99,31 @@ except Exception:
         app.config["JSON_AS_ASCII"] = False
     except Exception:
         pass
+# ============================================================
+# БАЗА ДАННЫХ (PostgreSQL / Neon)
+# ============================================================
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+def get_db_connection():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL не задан в переменных окружения.")
+    return psycopg2.connect(DATABASE_URL)
+
+
+def init_db():
+    """Создаёт таблицу для настроек, если её нет."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    data JSONB NOT NULL
+                );
+            """)
+            conn.commit()
+    log.info("Таблица settings готова.")
+
 
 # ============================================================
 # РАБОТА С API
@@ -112,6 +140,7 @@ def api_post(url, payload):
     token = get_token()
     if not token:
         raise RuntimeError("API-токен не найден. Проверь переменную TINKOFF_TOKEN.")
+
     response = requests.post(
         url,
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
@@ -162,7 +191,7 @@ def quotation_to_float(value):
     except Exception:
         return 0.0
 
-# === КОНЕЦ ЧАСТИ 1 ===
+
 # ============================================================
 # ФЬЮЧЕРСЫ
 # ============================================================
@@ -250,17 +279,13 @@ def find_active_future(prefix):
     if not candidates:
         return None
 
-    # Фильтр 1: контракт торгуется минимум 60 дней (отсекаем молодые BRK7 и т.п.)
     mature = [c for c in candidates
               if c.get("first_trade") and (now - c["first_trade"]).days >= 60]
     if mature:
         candidates = mature
 
-    # Фильтр 2: из зрелых выбираем с ближайшей экспирацией (самый ликвидный)
     candidates.sort(key=lambda x: x.get("last_trade") or datetime.max.replace(tzinfo=timezone.utc))
     return candidates[0]
-
-
 # ============================================================
 # АКЦИИ
 # ============================================================
@@ -274,7 +299,6 @@ STOCKS = [
 def find_share(stock):
     candidates = []
     now = datetime.now(timezone.utc)
-
     for query in stock["queries"]:
         try:
             data = api_post(FIND_INSTRUMENT_URL, {
@@ -285,11 +309,9 @@ def find_share(stock):
         except Exception as exc:
             log.warning("FindInstrument акции %s: %s", query, exc)
             continue
-
         instruments = data.get("instruments", [])
         if not isinstance(instruments, list):
             continue
-
         for item in instruments:
             if not isinstance(item, dict):
                 continue
@@ -335,6 +357,7 @@ def get_candles(instrument_uid, settings=None):
     interval = settings.get("candle_interval", CANDLE_INTERVAL_DEFAULT)
     if interval not in CANDLE_INTERVALS:
         interval = CANDLE_INTERVAL_DEFAULT
+
     data = api_post(CANDLES_URL, {
         "from": start.isoformat(),
         "to": now.isoformat(),
@@ -367,7 +390,7 @@ def normalize_candles(candles):
     result.sort(key=lambda x: x["time"])
     return result
 
-# === КОНЕЦ ЧАСТИ 2 ===
+
 # ============================================================
 # ИНДИКАТОРЫ
 # ============================================================
@@ -388,7 +411,6 @@ def sma(values, period):
 
 
 def atr(candles, period=14):
-    """Average True Range — волатильность за period свечей."""
     if len(candles) < period + 1:
         return 0.0
     trs = []
@@ -402,12 +424,11 @@ def atr(candles, period=14):
         return 0.0
     return sum(trs[-period:]) / period
 
-
 # ============================================================
 # СТРАТЕГИИ
 # ============================================================
 def no_signal(description="Сигнал не сформирован"):
-    return {"signal": "Нет сигналов", "direction": "—", "description": description}
+    return {"signal": "Нет сигналов", "direction": "---", "description": description}
 
 
 def bollinger_strategy(candles):
@@ -421,7 +442,6 @@ def bollinger_strategy(candles):
     lower = mid - 2 * std
     last = closes[-1]
     prev = closes[-2]
-
     if prev <= lower and last > prev:
         return {"signal": "LONG", "direction": "Вверх",
                 "description": f"Цена отскочила от нижней полосы Bollinger ({lower:.2f})"}
@@ -447,7 +467,6 @@ def user_strategy(candles):
         lows[3] < lows[2] and lows[4] < lows[3] and lows[5] < lows[4]
         and closes[-1] > closes[-2] and closes[-2] > closes[-3]
     )
-
     if short_pattern:
         return {"signal": "SHORT", "direction": "Вниз",
                 "description": "Авторская стратегия: растущие максимумы → подтверждённый разворот вниз"}
@@ -501,7 +520,6 @@ def rsi_strategy(candles):
     avg_gain = sum(gains) / len(gains)
     avg_loss = sum(losses) / len(losses)
     rsi = 100.0 if avg_loss == 0 else 100 - (100 / (1 + avg_gain / avg_loss))
-
     if rsi < 30 and closes[-1] > closes[-2]:
         return {"signal": "LONG", "direction": "Вверх",
                 "description": f"RSI перепродан ({rsi:.1f}) и цена разворачивается вверх"}
@@ -541,7 +559,6 @@ def hammer_strategy(candles):
     closes = [x["close"] for x in candles[-4:-1]]
     downtrend = closes[0] > closes[1] > closes[2]
     uptrend = closes[0] < closes[1] < closes[2]
-
     if downtrend and body < total_range * 0.35 and lower_wick >= body * 2 and upper_wick < body * 0.5:
         return {"signal": "LONG", "direction": "Вверх",
                 "description": "Hammer: длинная нижняя тень после падения — покупатели откупили цену"}
@@ -562,13 +579,11 @@ def engulfing_strategy(candles):
         return no_signal("Нет чёткого тела свечи")
     prev_bullish = prev["close"] > prev["open"]
     last_bullish = last["close"] > last["open"]
-
     if (not prev_bullish and last_bullish
             and last_body > prev_body * 1.2
             and last["open"] <= prev["close"] and last["close"] >= prev["open"]):
         return {"signal": "LONG", "direction": "Вверх",
                 "description": "Bullish Engulfing: зелёная свеча полностью поглотила предыдущую красную"}
-
     if (prev_bullish and not last_bullish
             and last_body > prev_body * 1.2
             and last["open"] >= prev["close"] and last["close"] <= prev["open"]):
@@ -584,18 +599,15 @@ def double_pattern_strategy(candles):
     highs = [x["high"] for x in window]
     lows = [x["low"] for x in window]
     closes = [x["close"] for x in window]
-
     first_half_high = max(highs[:20])
     second_half_high = max(highs[20:])
     first_half_low = min(lows[:20])
     second_half_low = min(lows[20:])
     tolerance = 0.015
-
     if (abs(first_half_high - second_half_high) / first_half_high < tolerance
             and closes[-1] < min(highs[10:30]) * 0.99):
         return {"signal": "SHORT", "direction": "Вниз",
                 "description": f"Double Top: два максимума около {second_half_high:.2f} и пробой вниз"}
-
     if (abs(first_half_low - second_half_low) / first_half_low < tolerance
             and closes[-1] > max(lows[10:30]) * 1.01):
         return {"signal": "LONG", "direction": "Вверх",
@@ -623,12 +635,10 @@ def supertrend_strategy(candles):
     mid = (last["high"] + last["low"]) / 2
     upper_band = mid + multiplier * atr_val
     lower_band = mid - multiplier * atr_val
-
     prev = candles[-2]
     prev_mid = (prev["high"] + prev["low"]) / 2
     prev_upper = prev_mid + multiplier * atr_val
     prev_lower = prev_mid - multiplier * atr_val
-
     if prev["close"] < prev_lower and last["close"] > lower_band:
         return {"signal": "LONG", "direction": "Вверх",
                 "description": f"SuperTrend: цена пробила нижнюю полосу (ATR={atr_val:.2f}), тренд вверх"}
@@ -653,7 +663,6 @@ STRATEGIES = [
     {"name": "SuperTrend", "key": "supertrend", "fn": supertrend_strategy, "min_bars": 15},
 ]
 
-# === КОНЕЦ ЧАСТИ 3 ===
 # ============================================================
 # РАСЧЁТ РЕЗУЛЬТАТОВ
 # ============================================================
@@ -664,19 +673,16 @@ def calculate_commission(amount, percent):
 def calculate_trade_result(direction, entry_price, exit_price):
     if entry_price <= 0 or exit_price <= 0:
         return None
-
     if direction == "LONG":
         price_change_percent = (exit_price - entry_price) / entry_price * 100
     else:
         price_change_percent = (entry_price - exit_price) / entry_price * 100
-
     gross_result = POSITION_SIZE_RUBLES * price_change_percent / 100
     buy_commission = calculate_commission(POSITION_SIZE_RUBLES, BUY_COMMISSION_PERCENT)
     exit_amount = POSITION_SIZE_RUBLES * (exit_price / entry_price)
     sell_commission = calculate_commission(abs(exit_amount), SELL_COMMISSION_PERCENT)
     tax = max(gross_result, 0) * TAX_PERCENT / 100
     net_result = gross_result - buy_commission - sell_commission - tax
-
     return {
         "price_change_percent": round(price_change_percent, 4),
         "gross_result": round(gross_result, 2),
@@ -722,30 +728,40 @@ def calculate_max_drawdown(trades):
 
 
 # ============================================================
-# НАСТРОЙКИ
+# НАСТРОЙКИ (PostgreSQL)
 # ============================================================
 def load_settings():
-    if not os.path.exists(SETTINGS_FILE):
-        save_settings(DEFAULT_SETTINGS)
-        return dict(DEFAULT_SETTINGS)
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        result = dict(DEFAULT_SETTINGS)
-        if isinstance(data, dict):
-            result.update({k: data[k] for k in DEFAULT_SETTINGS if k in data})
-        return result
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT data FROM settings WHERE id = 1;")
+                row = cur.fetchone()
+                if row and row["data"]:
+                    result = dict(DEFAULT_SETTINGS)
+                    result.update(row["data"])
+                    return result
+                else:
+                    save_settings(DEFAULT_SETTINGS)
+                    return dict(DEFAULT_SETTINGS)
     except Exception as exc:
-        log.warning("Ошибка чтения настроек: %s", exc)
+        log.warning("Ошибка чтения настроек из БД: %s", exc)
         return dict(DEFAULT_SETTINGS)
 
 
 def save_settings(settings):
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO settings (id, data) VALUES (1, %s)
+                    ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data;
+                    """,
+                    (json.dumps(settings, ensure_ascii=False),),
+                )
+                conn.commit()
     except Exception as exc:
-        log.error("Ошибка сохранения настроек: %s", exc)
+        log.error("Ошибка сохранения настроек в БД: %s", exc)
 
 
 def load_history():
@@ -754,7 +770,7 @@ def load_history():
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return data if isinstance(data, list) else []
+        return data if isinstance(data, list) else []
     except Exception as exc:
         log.warning("Ошибка чтения истории: %s", exc)
         return []
@@ -803,19 +819,16 @@ def _open_position(direction, price, candle_time, window, use_sl, use_tp, sl_mul
 def build_strategy_history(candles, instrument, title, strategy_fn, settings=None):
     if settings is None:
         settings = load_settings()
-
     min_bars = 8
     for s in STRATEGIES:
         if s["fn"] is strategy_fn:
             min_bars = s["min_bars"]
             break
-
     if len(candles) < min_bars:
         return [], None
 
     trades = []
     current_position = None
-
     use_sl = bool(settings.get("use_stop_loss", True))
     use_tp = bool(settings.get("use_take_profit", True))
     use_be = bool(settings.get("use_breakeven", True))
@@ -831,14 +844,12 @@ def build_strategy_history(candles, instrument, title, strategy_fn, settings=Non
         price = candle["close"]
         candle_time = candle["time"]
 
-        # ---------- УПРАВЛЕНИЕ ОТКРЫТОЙ ПОЗИЦИЕЙ ----------
         if current_position is not None:
             direction = current_position["direction"]
             entry = current_position["entry_price"]
             exit_price = None
             exit_reason = None
 
-            # 1) Стоп-лосс
             if use_sl and current_position.get("stop_loss") is not None:
                 sl = current_position["stop_loss"]
                 if direction == "LONG" and candle["low"] <= sl:
@@ -848,7 +859,6 @@ def build_strategy_history(candles, instrument, title, strategy_fn, settings=Non
                     exit_price = sl
                     exit_reason = "Стоп-лосс"
 
-            # 2) Тейк-профит
             if exit_price is None and use_tp and current_position.get("take_profit") is not None:
                 tp = current_position["take_profit"]
                 if direction == "LONG" and candle["high"] >= tp:
@@ -858,7 +868,6 @@ def build_strategy_history(candles, instrument, title, strategy_fn, settings=Non
                     exit_price = tp
                     exit_reason = "Тейк-профит"
 
-            # 3) Безубыток
             if use_be and exit_price is None and not current_position.get("breakeven_moved", False):
                 atr_val = current_position.get("atr_value", 0.0)
                 if atr_val > 0:
@@ -870,7 +879,6 @@ def build_strategy_history(candles, instrument, title, strategy_fn, settings=Non
                         current_position["stop_loss"] = entry
                         current_position["breakeven_moved"] = True
 
-            # 4) Противоположный сигнал
             if exit_price is None and signal in ("LONG", "SHORT") and signal != direction:
                 exit_price = price
                 exit_reason = "Противоположный сигнал"
@@ -899,7 +907,6 @@ def build_strategy_history(candles, instrument, title, strategy_fn, settings=Non
                     )
                 continue
 
-        # ---------- ОТКРЫТИЕ НОВОЙ ПОЗИЦИИ ----------
         if current_position is None and signal in ("LONG", "SHORT"):
             current_position = _open_position(
                 signal, price, candle_time, window,
@@ -945,7 +952,6 @@ def evaluate_all_strategies(candles, instrument, title, settings=None):
         })
 
     eligible_rows = [r for r in rows if r["eligible"]]
-
     if eligible_rows:
         best = max(eligible_rows, key=lambda x: x["score"])
         selection_reason = (
@@ -962,7 +968,6 @@ def evaluate_all_strategies(candles, instrument, title, settings=None):
 
     for row in rows:
         row["is_selected"] = row["key"] == best["key"]
-
     rows.sort(key=lambda x: (x["is_selected"], x["score"]), reverse=True)
     return rows, best, selection_reason
 
@@ -973,17 +978,17 @@ def strategy_signal_from_best(candles, best):
             return strategy["fn"](candles)
     return no_signal()
 
-# === КОНЕЦ ЧАСТИ 4 ===
+
 # ============================================================
 # АНАЛИЗ ИНСТРУМЕНТА
 # ============================================================
 def base_result(kind, code, title, emoji):
     return {
         "type": kind, "prefix": code, "title": title, "emoji": emoji,
-        "status": "Ошибка", "message": "", "ticker": "—",
-        "uid": "—", "candles": 0,
-        "strategy": {"signal": "Нет сигналов", "direction": "—", "description": ""},
-        "selected_strategy": "—", "selection_reason": "—", "strategy_selection": [],
+        "status": "Ошибка", "message": "", "ticker": "---",
+        "uid": "---", "candles": 0,
+        "strategy": {"signal": "Нет сигналов", "direction": "---", "description": ""},
+        "selected_strategy": "---", "selection_reason": "---", "strategy_selection": [],
         "history": [], "statistics": calculate_statistics([]), "open_position": None,
     }
 
@@ -991,10 +996,8 @@ def base_result(kind, code, title, emoji):
 def analyze_instrument(result, instrument, instrument_code, title, settings):
     result["ticker"] = instrument["ticker"]
     result["uid"] = instrument["instrument_uid"]
-
     candles = normalize_candles(get_candles(instrument["instrument_uid"], settings))
     result["candles"] = len(candles)
-
     if not candles:
         result["message"] = "Свечей 0 — API не вернул историю для этого инструмента."
         return result
@@ -1041,7 +1044,6 @@ def get_share_status(stock, settings):
         result["message"] = str(exc)
         return result
 
-
 # ============================================================
 # СБОР ДАННЫХ
 # ============================================================
@@ -1062,16 +1064,15 @@ def collect_data():
     all_trades = []
     for item in instruments:
         all_trades.extend(item.get("history", []))
-
     total_statistics = calculate_statistics(all_trades)
 
-    last_signal = {"title": "Нет сигналов", "signal": "—", "direction": "—", "description": ""}
+    last_signal = {"title": "Нет сигналов", "signal": "---", "direction": "---", "description": ""}
     for item in instruments:
         signal = item["strategy"].get("signal")
         if signal in ("LONG", "SHORT"):
             last_signal = {
                 "title": item["title"], "signal": signal,
-                "direction": item["strategy"].get("direction", "—"),
+                "direction": item["strategy"].get("direction", "---"),
                 "description": item["strategy"].get("description", ""),
             }
             break
@@ -1151,6 +1152,26 @@ def api_settings():
 
 
 # ============================================================
+# ФОНОВЫЙ МОНИТОРИНГ
+# ============================================================
+def background_monitor():
+    while True:
+        try:
+            data = collect_data()
+            log.info("MARKUS TRADE | обновление данных")
+            for item in data["futures"] + data["shares"]:
+                log.info("%s | ticker=%s | candles=%s | strategy=%s | signal=%s",
+                         item["title"], item["ticker"], item["candles"],
+                         item["selected_strategy"], item["strategy"]["signal"])
+            stats = data["statistics"]
+            log.info("СТАТИСТИКА | сделок=%s | winrate=%s%% | чистый=%s ₽",
+                     stats["total"], stats["winrate"], stats["net"])
+        except Exception as exc:
+            log.exception("Ошибка фонового мониторинга: %s", exc)
+        time.sleep(UPDATE_SECONDS)
+
+
+# ============================================================
 # HTML
 # ============================================================
 HTML = r"""
@@ -1199,30 +1220,30 @@ input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color
 <div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">Загрузка...</div></div>
 
 <div class="card" id="riskCard">
-  <h2>⚙️ Управление бэктестом</h2>
-  <div class="info">
-    <b>Таймфрейм:</b><br>
-    <select id="intervalSelect" style="width:100%">
-      <option value="CANDLE_INTERVAL_5_MIN">5 минут</option>
-      <option value="CANDLE_INTERVAL_15_MIN">15 минут</option>
-      <option value="CANDLE_INTERVAL_HOUR">1 час</option>
-      <option value="CANDLE_INTERVAL_4_HOUR">4 часа</option>
-      <option value="CANDLE_INTERVAL_DAY">1 день</option>
-    </select>
-    <br><br>
-    <b>Глубина истории (дней):</b><br>
-    <input type="number" id="historyDaysInput" min="5" max="365" step="5" style="width:100%">
-    <br><br>
-    <b>🛡️ Риск-менеджмент</b><br><br>
-    <label><input type="checkbox" id="useSL"> Стоп-лосс</label>
-    <input type="number" id="slMult" step="0.1" min="0.5" style="width:70px"> × ATR<br>
-    <label><input type="checkbox" id="useTP"> Тейк-профит</label>
-    <input type="number" id="tpMult" step="0.1" min="0.5" style="width:70px"> × ATR<br>
-    <label><input type="checkbox" id="useBE"> Безубыток</label>
-    <input type="number" id="beTrig" step="0.1" min="0.1" style="width:70px"> × ATR<br><br>
-    <button onclick="saveRiskSettings()">💾 Сохранить</button>
-    <button onclick="loadData()">🔄 Пересчитать</button>
-  </div>
+<h2>⚙️ Управление бэктестом</h2>
+<div class="info">
+<b>Таймфрейм:</b><br>
+<select id="intervalSelect" style="width:100%">
+<option value="CANDLE_INTERVAL_5_MIN">5 минут</option>
+<option value="CANDLE_INTERVAL_15_MIN">15 минут</option>
+<option value="CANDLE_INTERVAL_HOUR">1 час</option>
+<option value="CANDLE_INTERVAL_4_HOUR">4 часа</option>
+<option value="CANDLE_INTERVAL_DAY">1 день</option>
+</select>
+<br><br>
+<b>Глубина истории (дней):</b><br>
+<input type="number" id="historyDaysInput" min="5" max="365" step="5" style="width:100%">
+<br><br>
+<b>🛡️ Риск-менеджмент</b><br><br>
+<label><input type="checkbox" id="useSL"> Стоп-лосс</label>
+<input type="number" id="slMult" step="0.1" min="0.5" style="width:70px"> × ATR<br>
+<label><input type="checkbox" id="useTP"> Тейк-профит</label>
+<input type="number" id="tpMult" step="0.1" min="0.5" style="width:70px"> × ATR<br>
+<label><input type="checkbox" id="useBE"> Безубыток</label>
+<input type="number" id="beTrig" step="0.1" min="0.1" style="width:70px"> × ATR<br><br>
+<button onclick="saveRiskSettings()">💾 Сохранить</button>
+<button onclick="loadData()">🔄 Пересчитать</button>
+</div>
 </div>
 
 <div class="section-title">📊 ФЬЮЧЕРСЫ</div><div class="grid" id="futures"></div>
@@ -1232,14 +1253,15 @@ input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color
 <div class="card history"><h2>📜 История сделок</h2><div class="table-wrap" id="history"></div></div>
 
 <div class="card settings"><h2>ℹ️ Параметры</h2>
-Размер виртуальной позиции: <b id="positionSize">—</b> ₽<br>
-Комиссия покупки: <b id="buyCommission">—</b>%<br>
-Комиссия продажи: <b id="sellCommission">—</b>%<br>
-Налог: <b id="tax">—</b>%<br>
-Таймфрейм: <b id="interval">—</b><br>
-История: <b id="historyDays">—</b> дней<br>
-Стратегий: <b id="strategiesCount">—</b><br>
-Выход из сделки: <b id="exitRule">—</b></div>
+Размер виртуальной позиции: <b id="positionSize">---</b> ₽<br>
+Комиссия покупки: <b id="buyCommission">---</b>%<br>
+Комиссия продажи: <b id="sellCommission">---</b>%<br>
+Налог: <b id="tax">---</b>%<br>
+Таймфрейм: <b id="interval">---</b><br>
+История: <b id="historyDays">---</b> дней<br>
+Стратегий: <b id="strategiesCount">---</b><br>
+Выход из сделки: <b id="exitRule">---</b></div>
+
 </div>
 
 <script>
@@ -1253,14 +1275,11 @@ function renderInstrumentCard(item){
   if(item.open_position) open=item.open_position.direction+' от '+money(item.open_position.entry_price);
   return `<div class="card"><h2>${item.emoji} ${item.title}</h2><span class="status ${item.status==='OK'?'':'error'}">${item.status}</span><div class="info">${item.message||''}</div><div class="info">Тикер: <b>${item.ticker}</b><br>UID: <b>${item.uid}</b><br>Свечей: <b>${item.candles}</b></div><div class="signal ${signalClass(signal)}">${signal}</div><div class="info">${item.strategy.description||''}</div><div class="info selected"><b>🤖 Выбрана: ${item.selected_strategy}</b><br>${item.selection_reason||''}<br>Сделок: <b>${stats.total||0}</b> · Winrate: <b>${stats.winrate||0}%</b><br>Прибыльных: <b>${stats.profitable||0}</b> · Убыточных: <b>${stats.losing||0}</b><br>Чистый: <b>${money(stats.net)} ₽</b><br>Открытая позиция: <b>${open}</b></div><div class="strategy-box"><b>🔬 Все стратегии</b>${(item.strategy_selection||[]).map((r,i)=>`<div class="strategy-row ${r.is_selected?'selected':''}"><span>${r.is_selected?'⭐ ':''}${i+1}. ${r.name}</span><span>${r.statistics.total} сдел.</span><span>${r.statistics.winrate}%</span><span class="${r.statistics.net>=0?'positive':'negative'}">${money(r.statistics.net)} ₽</span><span>DD ${money(r.drawdown)} ₽</span><span>${r.reason}</span></div>`).join('')}</div></div>`;
 }
-
 function renderFutures(data){document.getElementById('futures').innerHTML=data.futures.map(renderInstrumentCard).join('')}
 function renderShares(data){document.getElementById('shares').innerHTML=data.shares.map(renderInstrumentCard).join('')}
-
 function renderStatistics(s){
   document.getElementById('statistics').innerHTML=`<div class="stat"><div class="stat-title">Всего сделок</div><div class="stat-value">${s.total}</div></div><div class="stat"><div class="stat-title">Прибыльных</div><div class="stat-value">${s.profitable}</div></div><div class="stat"><div class="stat-title">Убыточных</div><div class="stat-value">${s.losing}</div></div><div class="stat"><div class="stat-title">Winrate</div><div class="stat-value">${s.winrate}%</div></div><div class="stat"><div class="stat-title">До расходов</div><div class="stat-value">${money(s.gross)} ₽</div></div><div class="stat"><div class="stat-title">Комиссии</div><div class="stat-value">${money(s.commission)} ₽</div></div><div class="stat"><div class="stat-title">Налог</div><div class="stat-value">${money(s.tax)} ₽</div></div><div class="stat"><div class="stat-title">ЧИСТЫЙ РЕЗУЛЬТАТ</div><div class="stat-value ${s.net>=0?'positive':'negative'}">${money(s.net)} ₽</div></div>`;
 }
-
 function renderHistory(data){
   let all=[];
   [...data.futures,...data.shares].forEach(x=>all=all.concat(x.history||[]));
@@ -1271,11 +1290,10 @@ function renderHistory(data){
   all.slice(0,100).forEach(t=>{
     const n=Number(t.net_result||0);
     const commission=Number(t.buy_commission||0)+Number(t.sell_commission||0);
-    h+=`<tr><td>${t.title}</td><td>${t.direction}</td><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.entry_price}</td><td>${t.exit_price}</td><td>${t.exit_reason||'—'}</td><td>${money(t.gross_result)} ₽</td><td>${money(commission)} ₽</td><td>${money(t.tax)} ₽</td><td class="${n>=0?'positive':'negative'}">${money(n)} ₽</td></tr>`;
+    h+=`<tr><td>${t.title}</td><td>${t.direction}</td><td>${t.entry_time}</td><td>${t.exit_time}</td><td>${t.entry_price}</td><td>${t.exit_price}</td><td>${t.exit_reason||'---'}</td><td>${money(t.gross_result)} ₽</td><td>${money(commission)} ₽</td><td>${money(t.tax)} ₽</td><td class="${n>=0?'positive':'negative'}">${money(n)} ₽</td></tr>`;
   });
   c.innerHTML=h+'</tbody></table>';
 }
-
 function renderRiskSettings(s){
   const sel = document.getElementById('intervalSelect');
   if (sel && s.candle_interval) sel.value = s.candle_interval;
@@ -1288,7 +1306,6 @@ function renderRiskSettings(s){
   document.getElementById('useBE').checked = !!s.use_breakeven;
   document.getElementById('beTrig').value = s.breakeven_trigger_atr;
 }
-
 async function saveRiskSettings(){
   const payload = {
     candle_interval: document.getElementById('intervalSelect').value,
@@ -1313,7 +1330,6 @@ async function saveRiskSettings(){
     alert('Ошибка: ' + res.error);
   }
 }
-
 async function loadData(){
   try{
     const response=await fetch('/api/status');
@@ -1343,26 +1359,6 @@ def index():
 
 
 # ============================================================
-# ФОНОВЫЙ МОНИТОРИНГ
-# ============================================================
-def background_monitor():
-    while True:
-        try:
-            data = collect_data()
-            log.info("MARKUS TRADE | обновление данных")
-            for item in data["futures"] + data["shares"]:
-                log.info("%s | ticker=%s | candles=%s | strategy=%s | signal=%s",
-                         item["title"], item["ticker"], item["candles"],
-                         item["selected_strategy"], item["strategy"]["signal"])
-            stats = data["statistics"]
-            log.info("СТАТИСТИКА | сделок=%s | winrate=%s%% | чистый=%s ₽",
-                     stats["total"], stats["winrate"], stats["net"])
-        except Exception as exc:
-            log.exception("Ошибка фонового мониторинга: %s", exc)
-        time.sleep(UPDATE_SECONDS)
-
-
-# ============================================================
 # ЗАПУСК
 # ============================================================
 if __name__ == "__main__":
@@ -1371,8 +1367,12 @@ if __name__ == "__main__":
     else:
         log.info("API-токен найден.")
 
-    threading.Thread(target=background_monitor, daemon=True).start()
+    try:
+        init_db()
+    except Exception as exc:
+        log.error("Ошибка инициализации БД: %s", exc)
 
+    threading.Thread(target=background_monitor, daemon=True).start()
     port = int(os.environ.get("PORT", "5000"))
     log.info("MARKUS TRADE запускается на порту %s", port)
     app.run(host="0.0.0.0", port=port, debug=False)
