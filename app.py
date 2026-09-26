@@ -82,9 +82,9 @@ SETTINGS_FILE = "settings.json"
 # ============================================================
 TRADING_ENABLED = True
 ALLOWED_TELEGRAM_IDS = [1024945345]
-MAX_POSITION_SIZE_RUB = 4800.0     # 100% депозита
-MAX_DAILY_LOSS_RUB = 1500.0        # увеличили лимит, чтобы не стоп сразу
-MAX_OPEN_POSITIONS = 1             # только 1 позиция одновременно
+MAX_POSITION_SIZE_RUB = 2500.0
+MAX_DAILY_LOSS_RUB = 1500.0
+MAX_OPEN_POSITIONS = 1           # только 1 позиция одновременно
 TRADE_LOG_FILE = "trade_log.json"  # лог реальных сделок
 DRY_RUN = False                    # False = отправляем ордера реально
 
@@ -383,9 +383,18 @@ def find_active_future(prefix):
 
 
 STOCKS = [
-    {"code": "SBER", "title": "Сбербанк", "emoji": "🏦", "queries": ["SBER", "Сбербанк"]},
-    {"code": "ROSN", "title": "Роснефть", "emoji": "🛢️", "queries": ["ROSN", "Роснефть"]},
-    {"code": "GMKN", "title": "Норникель", "emoji": "⛏️", "queries": ["GMKN", "NORNICKEL", "Норникель"]},
+    {"code": "SBER", "title": "Сбербанк", "emoji": "", "queries": ["SBER", "Сбербанк"]},
+    {"code": "GAZP", "title": "Газпром", "emoji": "", "queries": ["GAZP", "Газпром"]},
+    {"code": "ROSN", "title": "Роснефть", "emoji": "", "queries": ["ROSN", "Роснефть"]},
+    {"code": "VTBR", "title": "ВТБ", "emoji": "", "queries": ["VTBR", "ВТБ"]},
+    {"code": "MTSS", "title": "МТС", "emoji": "", "queries": ["MTSS", "МТС"]},
+    {"code": "AFLT", "title": "Аэрофлот", "emoji": "", "queries": ["AFLT", "Аэрофлот"]},
+    {"code": "ALRS", "title": "АЛРОСА", "emoji": "", "queries": ["ALRS", "АЛРОСА"]},
+    {"code": "MAGN", "title": "ММК", "emoji": "", "queries": ["MAGN", "ММК"]},
+    {"code": "NLMK", "title": "НЛМК", "emoji": "", "queries": ["NLMK", "НЛМК"]},
+    {"code": "CHMF", "title": "Северсталь", "emoji": "", "queries": ["CHMF", "Северсталь"]},
+    {"code": "NVTK", "title": "Новатэк", "emoji": "", "queries": ["NVTK", "Новатэк"]},
+    {"code": "TATN", "title": "Татнефть", "emoji": "", "queries": ["TATN", "Татнефть"]},
 ]
 
 def find_share(stock):
@@ -1799,7 +1808,7 @@ def background_monitor():
                 now = datetime.now(timezone.utc)
                 updated = _SCREENING_CACHE.get("updated_at")
                 need_screening = first_run or not updated or \
-                                 (now - updated).total_seconds() > 3600
+                                 (now - updated).total_seconds() > 14400
             if need_screening:
                 log.info("Пересчёт скрининга стратегий...")
                 get_screening_cached(max_age_seconds=0)
