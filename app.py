@@ -2010,6 +2010,7 @@ window.fetch = function(url, options) {
     if (url && typeof url === 'string' && url.indexOf('/api/') === 0) {
       if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
         headers['Authorization'] = 'Bearer ' + btoa(window.Telegram.WebApp.initData);
+console.log('[fetch intercept] URL:', url, '| Authorization set, len:', window.Telegram.WebApp.initData.length);
       }
     }
   } catch(e) { console.error('initData error:', e); }
