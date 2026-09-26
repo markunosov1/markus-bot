@@ -1993,8 +1993,6 @@ window.fetch = function(url, options) {
   return _originalFetch(url, Object.assign({}, options, { headers: headers }));
 };
 
-  return fetch(url, Object.assign({}, options, { headers: headers }));
-}
 function signalClass(s){return s==='LONG'?'long':s==='SHORT'?'short':'none'}
 
 const MAX_HISTORY_DAYS_JS = {"CANDLE_INTERVAL_5_MIN":7,"CANDLE_INTERVAL_15_MIN":14,"CANDLE_INTERVAL_HOUR":30,"CANDLE_INTERVAL_4_HOUR":90,"CANDLE_INTERVAL_DAY":365};
