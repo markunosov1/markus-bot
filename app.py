@@ -1547,7 +1547,7 @@ def api_status():
         return jsonify({"error": "Forbidden"}), 403
     try:
         return jsonify(collect_data())
-
+    except Exception as exc:
 
 @app.route("/api/history")
 def api_history():
