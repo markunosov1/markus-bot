@@ -1892,7 +1892,10 @@ details[open] summary::before{content:"[-] "}
 
 <div class="card statistics"><h2>Total Statistics</h2><div class="stats-grid" id="statistics"></div></div>
 <div class="card history"><h2>Trade History</h2><div class="table-wrap" id="history"></div></div>
-
+<div class="card" id="tradingLogCard">
+<h2>Trading Log (последние 20)</h2>
+<div id="tradingLogList" style="font-size:12px;color:#aab3c2">Загрузка...</div>
+</div>
 <div class="card settings"><h2>Parameters</h2>
 Position size: <b id="positionSize">---</b> RUB<br>
 Buy commission: <b id="buyCommission">---</b>%<br>
