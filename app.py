@@ -1583,6 +1583,46 @@ def api_trading_config():
     if not is_authorized(request):
         return jsonify({"ok": False, "error": "Forbidden"}), 403
     if request.method == "GET":
+        cfg = load_trading_config()
+        return jsonify({
+            "ok": True,
+            "account_id": cfg["account_id"],
+            "pairs": cfg["pairs"],
+            "trading_enabled": TRADING_ENABLED,
+        })
+    try:
+        data = request.get_json(force=True) or {}
+        account_id = str(data.get("account_id", "")).strip()
+        pairs = data.get("pairs", [])
+        if not isinstance(pairs, list):
+            return jsonify({"ok": False, "error": "pairs must be a list"}), 400
+        clean_pairs = []
+        valid_strategy_keys = [s["key"] for s in STRATEGIES]
+        for p in pairs:
+            if not isinstance(p, dict):
+                continue
+            instrument = str(p.get("instrument", "")).strip()
+            strategy_key = str(p.get("strategy", "")).strip()
+            interval = str(p.get("interval", "")).strip()
+            if strategy_key not in valid_strategy_keys:
+                continue
+            if interval not in CANDLE_INTERVALS:
+                continue
+            if not instrument:
+                continue
+            clean_pairs.append({
+                "instrument": instrument,
+                "strategy": strategy_key,
+                "interval": interval,
+                "size_rub": float(p.get("size_rub", MAX_POSITION_SIZE_RUB)),
+                "use_sl": bool(p.get("use_sl", True)),
+                "use_tp": bool(p.get("use_tp", True)),
+            })
+        save_trading_config(account_id, clean_pairs)
+        return jsonify({"ok": True, "pairs": clean_pairs})
+    except Exception as exc:
+        log.exception("Ошибка /api/trading_config")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/screening")
@@ -1590,6 +1630,25 @@ def api_screening():
     if not is_authorized(request):
         return jsonify({"error": "Forbidden"}), 403
     try:
+        force = request.args.get("force", "").lower() in ("1", "true", "yes")
+        if force:
+            with _SCREENING_LOCK:
+                _SCREENING_CACHE["updated_at"] = None
+        data = get_screening_cached()
+        updated = _SCREENING_CACHE["updated_at"]
+        import json as _json
+        body = _json.dumps({
+            "updated_at": updated.isoformat() if updated else None,
+            **data,
+        }, ensure_ascii=False)
+        return app.response_class(
+            body,
+            mimetype="application/json; charset=utf-8"
+        )
+    except Exception as exc:
+        log.exception("Ошибка /api/screening")
+        return jsonify({"error": str(exc)}), 500
+
 
 
 @app.route("/api/settings", methods=["GET", "POST"])
