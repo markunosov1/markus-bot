@@ -1885,10 +1885,21 @@ History: <b id="historyDays">---</b> days<br>
 Strategies: <b id="strategiesCount">---</b><br>
 Exit rule: <b id="exitRule">---</b></div>
 
-</div>
-
 <script>
 function money(v){return Number(v||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}
+const _originalFetch = window.fetch.bind(window);
+window.fetch = function(url, options) {
+  options = options || {};
+  const headers = Object.assign({}, options.headers || {});
+  try {
+    if (url && typeof url === 'string' && url.indexOf('/api/') === 0) {
+      if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+        headers['Authorization'] = 'Bearer ' + btoa(window.Telegram.WebApp.initData);
+      }
+    }
+  } catch(e) { console.error('initData error:', e); }
+  return _originalFetch(url, Object.assign({}, options, { headers: headers }));
+};
 function apiFetch(url, options) {
   options = options || {};
   const headers = Object.assign({}, options.headers || {});
