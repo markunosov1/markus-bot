@@ -856,6 +856,153 @@ def get_accounts():
         log.warning("Ошибка get_accounts: %s", exc)
         return []
 
+# ============================================================
+# ТОРГОВЫЕ ФУНКЦИИ
+# ============================================================
+TRADING_LOG_FILE = "trading_log.json"
+
+
+def load_trading_log():
+    if not os.path.exists(TRADING_LOG_FILE):
+        return []
+    try:
+        with open(TRADING_LOG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def save_trading_log(entries):
+    try:
+        with open(TRADING_LOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(entries[-1000:], f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        log.error("Ошибка сохранения trading_log: %s", exc)
+
+
+def log_trade_event(event_type, details):
+    entries = load_trading_log()
+    entries.append({
+        "time": datetime.now(timezone.utc).isoformat(),
+        "type": event_type,
+        "details": details,
+    })
+    save_trading_log(entries)
+    log.info("TRADE_EVENT | %s | %s", event_type, json.dumps(details, ensure_ascii=False))
+
+
+def get_positions(account_id):
+    try:
+        data = api_post(GET_POSITIONS_URL, {"accountId": account_id})
+        positions = data.get("securities", []) + data.get("futures", [])
+        return positions
+    except Exception as exc:
+        log.warning("Ошибка get_positions: %s", exc)
+        return []
+
+
+def place_order(account_id, instrument_uid, direction, quantity):
+    order_id = str(uuid.uuid4())
+    payload = {
+        "instrumentId": instrument_uid,
+        "quantity": str(quantity),
+        "direction": "ORDER_DIRECTION_BUY" if direction == "BUY" else "ORDER_DIRECTION_SELL",
+        "accountId": account_id,
+        "orderType": "ORDER_TYPE_MARKET",
+        "orderId": order_id,
+    }
+    log_trade_event("place_order_attempt", {
+        "account_id": account_id,
+        "instrument_uid": instrument_uid,
+        "direction": direction,
+        "quantity": quantity,
+        "order_id": order_id,
+    })
+    try:
+        result = api_post(POST_ORDER_URL, payload)
+        log_trade_event("place_order_success", {"order_id": order_id, "response": result})
+        return result
+    except Exception as exc:
+        log_trade_event("place_order_error", {"order_id": order_id, "error": str(exc)})
+        raise
+
+
+def calculate_lots(price, size_rub, lot_size=1):
+    if price <= 0:
+        return 0
+    one_lot_cost = price * lot_size
+    if one_lot_cost <= 0:
+        return 0
+    return max(0, int(size_rub // one_lot_cost))
+
+
+def check_daily_loss():
+    entries = load_trading_log()
+    today = datetime.now(timezone.utc).date().isoformat()
+    daily_loss = 0.0
+    for e in entries:
+        if not e.get("time", "").startswith(today):
+            continue
+        if e.get("type") == "trade_closed":
+            pnl = float(e.get("details", {}).get("pnl", 0))
+            if pnl < 0:
+                daily_loss += abs(pnl)
+    if daily_loss >= MAX_DAILY_LOSS_RUB:
+        log.warning("ДНЕВНОЙ ЛИМИТ УБЫТКА: %.2f ₽ >= %.2f ₽", daily_loss, MAX_DAILY_LOSS_RUB)
+        return True
+    return False
+
+
+def get_open_positions_count():
+    entries = load_trading_log()
+    opens = {}
+    for e in entries:
+        t = e.get("type")
+        d = e.get("details", {})
+        uid = d.get("instrument_uid")
+        if not uid:
+            continue
+        if t == "position_opened":
+            opens[uid] = d
+        elif t == "position_closed":
+            opens.pop(uid, None)
+    return len(opens)
+
+
+def is_position_open(instrument_uid):
+    entries = load_trading_log()
+    opens = {}
+    for e in entries:
+        t = e.get("type")
+        d = e.get("details", {})
+        uid = d.get("instrument_uid")
+        if not uid:
+            continue
+        if t == "position_opened":
+            opens[uid] = d
+        elif t == "position_closed":
+            opens.pop(uid, None)
+    return instrument_uid in opens
+
+
+def _resolve_instrument_uid(instrument_code):
+    try:
+        if instrument_code in ("CR", "GD", "BR"):
+            instrument = find_active_future(instrument_code)
+            return instrument["instrument_uid"] if instrument else None
+        stock = None
+        for s in STOCKS:
+            if s["code"] == instrument_code:
+                stock = s
+                break
+        if not stock:
+            return None
+        instrument = find_share(stock)
+        return instrument["instrument_uid"] if instrument else None
+    except Exception as exc:
+        log.warning("_resolve_instrument_uid(%s): %s", instrument_code, exc)
+        return None
 
 def load_history():
     if not os.path.exists(HISTORY_FILE):
