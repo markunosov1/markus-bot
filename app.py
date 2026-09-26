@@ -1703,6 +1703,10 @@ def background_monitor():
             log.exception("Ошибка фонового мониторинга: %s", exc)
 
         try:
+            try:
+            _run_trading_check()
+        except Exception as exc:
+            log.exception("Ошибка _run_trading_check: %s", exc)
             with _SCREENING_LOCK:
                 now = datetime.now(timezone.utc)
                 updated = _SCREENING_CACHE.get("updated_at")
