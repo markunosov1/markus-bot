@@ -2193,6 +2193,41 @@ async function saveTradingConfig(){
     alert('Ошибка: ' + res.error);
   }
 }
+async function loadTradingLog(){
+  try {
+    const r = await fetch('/api/trading_log');
+    const data = await r.json();
+    const el = document.getElementById('tradingLogList');
+    if (!data.ok || !data.entries || !data.entries.length) {
+      el.innerHTML = '<div style="color:#8f99aa">Пока нет событий</div>';
+      return;
+    }
+    let h = '';
+    data.entries.slice(-20).reverse().forEach(e => {
+      const t = e.time ? new Date(e.time).toLocaleString('ru-RU') : '';
+      const type = e.type || '';
+      const d = e.details || {};
+      let line = '';
+      if (type === 'place_order_attempt') {
+        line = 'ОТПРАВКА ОРДЕРА: ' + (d.instrument_uid || '').slice(0,8) + ' | ' + (d.direction || '') + ' x' + (d.quantity || 0);
+      } else if (type === 'place_order_success') {
+        line = '✅ ОРДЕР ПРИНЯТ: ' + (d.order_id || '').slice(0,8);
+      } else if (type === 'place_order_error') {
+        line = '❌ ОШИБКА ОРДЕРА: ' + (d.error || '').slice(0,100);
+      } else if (type === 'position_opened') {
+        line = '🟢 ОТКРЫТА: ' + (d.instrument || '') + ' | ' + (d.signal || '') + ' | ' + (d.lots || 0) + ' лотов';
+      } else {
+        line = type + ': ' + JSON.stringify(d).slice(0,120);
+      }
+      h += '<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06)">';
+      h += '<span style="color:#7a8394">' + t + '</span> — ' + line;
+      h += '</div>';
+    });
+    el.innerHTML = h;
+  } catch(e) {
+    console.error(e);
+  }
+}
 
 async function saveRiskSettings(){
   const payload={
