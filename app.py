@@ -134,7 +134,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_db_connection():
     if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL Ð½Ðµ Ð·Ð°Ð´Ð°Ð½ Ð² Ð¿ÐµÑÐµÐ¼ÐµÐ½Ð½ÑÑ Ð¾ÐºÑÑÐ¶ÐµÐ½Ð¸Ñ.")
+        raise RuntimeError("DATABASE_URL не задан в переменных окружения.")
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -1770,15 +1770,15 @@ function renderScreening(data){
 // TRADING CONFIG
 // ============================================================
 const AVAILABLE_INSTRUMENTS = [
-  {id: "SBER", title: "Ð¡Ð±ÐµÑÐ±Ð°Ð½Ðº"},
-  {id: "ROSN", title: "Ð Ð¾ÑÐ½ÐµÑÑÑ"},
-  {id: "GMKN", title: "ÐÐ¾ÑÐ½Ð¸ÐºÐµÐ»Ñ"},
-  {id: "CR",   title: "Ð®Ð°Ð½Ñ"},
-  {id: "GD",   title: "ÐÐ¾Ð»Ð¾ÑÐ¾"},
-  {id: "BR",   title: "ÐÐµÑÑÑ Brent"}
+  {id: "SBER", title: "Сбербанк"},
+  {id: "ROSN", title: "Роснефть"},
+  {id: "GMKN", title: "Норникель"},
+  {id: "CR",   title: "Юань"},
+  {id: "GD",   title: "Золото"},
+  {id: "BR",   title: "Нефть Brent"}
 ];
 const AVAILABLE_STRATEGIES = [
-  {key: "user",       name: "Ð¢Ð²Ð¾Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ"},
+  {key: "user",       name: "Твоя стратегия"},
   {key: "ema",        name: "EMA Trend"},
   {key: "breakout",   name: "Breakout"},
   {key: "rsi",        name: "RSI Reversal"},
@@ -1790,34 +1790,34 @@ const AVAILABLE_STRATEGIES = [
   {key: "supertrend", name: "SuperTrend"}
 ];
 const AVAILABLE_INTERVALS = [
-  {key: "CANDLE_INTERVAL_HOUR",   label: "1 ÑÐ°Ñ"},
-  {key: "CANDLE_INTERVAL_4_HOUR", label: "4 ÑÐ°ÑÐ°"},
-  {key: "CANDLE_INTERVAL_DAY",    label: "1 Ð´ÐµÐ½Ñ"}
+  {key: "CANDLE_INTERVAL_HOUR",   label: "1 час"},
+  {key: "CANDLE_INTERVAL_4_HOUR", label: "4 часа"},
+  {key: "CANDLE_INTERVAL_DAY",    label: "1 день"}
 ];
 let CURRENT_PAIRS = [];
 
 async function loadAccounts(){
   const hint = document.getElementById('accountsHint');
-  hint.textContent = 'ÐÐ°Ð³ÑÑÐ·ÐºÐ°...';
+  hint.textContent = 'Загрузка...';
   try {
     const r = await fetch('/api/accounts');
     const data = await r.json();
     if (!data.ok) {
-      hint.innerHTML = '<span style="color:#ff6666">ÐÑÐ¸Ð±ÐºÐ°: ' + (data.error || 'Ð½ÐµÑ Ð´Ð°Ð½Ð½ÑÑ') + '</span>';
+      hint.innerHTML = '<span style="color:#ff6666">Ошибка: ' + (data.error || 'нет данных') + '</span>';
       return;
     }
     if (!data.accounts || !data.accounts.length) {
-      hint.innerHTML = '<span style="color:#ff6666">Ð¡ÑÐµÑÐ° Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ñ</span>';
+      hint.innerHTML = '<span style="color:#ff6666">Счета не найдены</span>';
       return;
     }
-    hint.innerHTML = 'ÐÐ°Ð¹Ð´ÐµÐ½Ð¾: ' + data.accounts.map(a =>
+    hint.innerHTML = 'Найдено: ' + data.accounts.map(a =>
       '<b>' + a.id + '</b> (' + (a.status || '') + ')'
     ).join(', ');
     if (!document.getElementById('accountIdInput').value && data.accounts[0]) {
       document.getElementById('accountIdInput').value = data.accounts[0].id;
     }
   } catch(e) {
-    hint.innerHTML = '<span style="color:#ff6666">ÐÑÐ¸Ð±ÐºÐ°: ' + e.message + '</span>';
+    hint.innerHTML = '<span style="color:#ff6666">Ошибка: ' + e.message + '</span>';
   }
 }
 
@@ -1836,20 +1836,20 @@ function makeSelect(id, options, currentValue, valueField, labelField) {
 function renderPairs(){
   const el = document.getElementById('pairsList');
   if (!CURRENT_PAIRS.length) {
-    el.innerHTML = '<div style="color:#8f99aa;font-size:13px;padding:10px">ÐÐ¾ÐºÐ° Ð½Ðµ Ð²ÑÐ±ÑÐ°Ð½Ð¾ Ð½Ð¸ Ð¾Ð´Ð½Ð¾Ð¹ Ð¿Ð°ÑÑ. ÐÐ°Ð¶Ð¼Ð¸ÑÐµ Â«+ Add pairÂ».</div>';
+    el.innerHTML = '<div style="color:#8f99aa;font-size:13px;padding:10px">Пока не выбрано ни одной пары. Нажмите «+ Add pair».</div>';
     return;
   }
   let h = '';
   CURRENT_PAIRS.forEach((p, i) => {
     h += '<div class="pair-card">';
     h += '<div class="pair-row2">';
-    h += '<div><div class="pair-label">ÐÐ½ÑÑÑÑÐ¼ÐµÐ½Ñ</div>' + makeSelect('pair_inst_' + i, AVAILABLE_INSTRUMENTS, p.instrument, 'id', 'title') + '</div>';
-    h += '<div><div class="pair-label">Ð¡ÑÑÐ°ÑÐµÐ³Ð¸Ñ</div>' + makeSelect('pair_strat_' + i, AVAILABLE_STRATEGIES, p.strategy, 'key', 'name') + '</div>';
+    h += '<div><div class="pair-label">Инструмент</div>' + makeSelect('pair_inst_' + i, AVAILABLE_INSTRUMENTS, p.instrument, 'id', 'title') + '</div>';
+    h += '<div><div class="pair-label">Стратегия</div>' + makeSelect('pair_strat_' + i, AVAILABLE_STRATEGIES, p.strategy, 'key', 'name') + '</div>';
     h += '</div>';
     h += '<div class="pair-row3">';
-    h += '<div><div class="pair-label">Ð¢Ð°Ð¹Ð¼ÑÑÐµÐ¹Ð¼</div>' + makeSelect('pair_int_' + i, AVAILABLE_INTERVALS, p.interval, 'key', 'label') + '</div>';
-    h += '<div><div class="pair-label">Ð Ð°Ð·Ð¼ÐµÑ, â½</div><input type="number" id="pair_size_' + i + '" value="' + (p.size_rub || 1000) + '" style="width:100%"></div>';
-    h += '<div style="display:flex;align-items:flex-end"><button onclick="removePair(' + i + ')" style="background:#442020;color:#ff8585;padding:6px 12px">Ð£Ð´Ð°Ð»Ð¸ÑÑ</button></div>';
+    h += '<div><div class="pair-label">Таймфрейм</div>' + makeSelect('pair_int_' + i, AVAILABLE_INTERVALS, p.interval, 'key', 'label') + '</div>';
+    h += '<div><div class="pair-label">Размер, ₽</div><input type="number" id="pair_size_' + i + '" value="' + (p.size_rub || 1000) + '" style="width:100%"></div>';
+    h += '<div style="display:flex;align-items:flex-end"><button onclick="removePair(' + i + ')" style="background:#442020;color:#ff8585;padding:6px 12px">Удалить</button></div>';
     h += '</div>';
     h += '</div>';
   });
@@ -1926,10 +1926,10 @@ async function saveTradingConfig(){
   });
   const res = await r.json();
   if (res.ok) {
-    alert('Ð¡Ð¾ÑÑÐ°Ð½ÐµÐ½Ð¾: ' + res.pairs.length + ' Ð¿Ð°Ñ');
+    alert('Сохранено: ' + res.pairs.length + ' пар');
     await loadTradingConfig();
   } else {
-    alert('ÐÑÐ¸Ð±ÐºÐ°: ' + res.error);
+    alert('Ошибка: ' + res.error);
   }
 }
 
