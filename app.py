@@ -1537,6 +1537,9 @@ def collect_data():
         },
     }
 
+@app.route("/ping")
+def ping():
+    return "pong", 200
 
 @app.route("/api/status")
 def api_status():
