@@ -2147,8 +2147,17 @@ function renderScreening(data){
 // ============================================================
 const AVAILABLE_INSTRUMENTS = [
   {id: "SBER", title: "Сбербанк"},
+  {id: "GAZP", title: "Газпром"},
   {id: "ROSN", title: "Роснефть"},
-  {id: "GMKN", title: "Норникель"},
+  {id: "VTBR", title: "ВТБ"},
+  {id: "MTSS", title: "МТС"},
+  {id: "AFLT", title: "Аэрофлот"},
+  {id: "ALRS", title: "АЛРОСА"},
+  {id: "MAGN", title: "ММК"},
+  {id: "NLMK", title: "НЛМК"},
+  {id: "CHMF", title: "Северсталь"},
+  {id: "NVTK", title: "Новатэк"},
+  {id: "TATN", title: "Татнефть"},
   {id: "CR",   title: "Юань"},
   {id: "GD",   title: "Золото"},
   {id: "BR",   title: "Нефть Brent"}
