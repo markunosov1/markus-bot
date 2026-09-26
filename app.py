@@ -976,23 +976,38 @@ def get_positions(account_id):
         return []
 
 
-def place_order(account_id, instrument_uid, direction, quantity):
+def place_order(account_id, instrument_uid, direction, quantity, current_price=None):
     order_id = str(uuid.uuid4())
+
     payload = {
         "instrumentId": instrument_uid,
         "quantity": str(quantity),
         "direction": "ORDER_DIRECTION_BUY" if direction == "BUY" else "ORDER_DIRECTION_SELL",
         "accountId": account_id,
-        "orderType": "ORDER_TYPE_MARKET",
         "orderId": order_id,
     }
+
+    if current_price and current_price > 0:
+        if direction == "BUY":
+            limit_price = current_price * 1.005
+        else:
+            limit_price = current_price * 0.995
+        units = int(limit_price)
+        nano = int((limit_price - units) * 1_000_000_000)
+        payload["price"] = {"units": units, "nano": nano}
+        payload["orderType"] = "ORDER_TYPE_LIMIT"
+    else:
+        payload["orderType"] = "ORDER_TYPE_MARKET"
+
     log_trade_event("place_order_attempt", {
         "account_id": account_id,
         "instrument_uid": instrument_uid,
         "direction": direction,
         "quantity": quantity,
         "order_id": order_id,
+        "current_price": current_price,
     })
+
     try:
         result = api_post(POST_ORDER_URL, payload)
         log_trade_event("place_order_success", {"order_id": order_id, "response": result})
@@ -1000,6 +1015,7 @@ def place_order(account_id, instrument_uid, direction, quantity):
     except Exception as exc:
         log_trade_event("place_order_error", {"order_id": order_id, "error": str(exc)})
         raise
+
 
 
 def calculate_lots(price, size_rub, lot_size=1):
@@ -1770,7 +1786,7 @@ def _run_trading_check():
             log.info("ОТКРЫТИЕ | %s | %s | %s | %d лотов | %.2f ₽ | итог %.0f ₽",
                      instrument, strategy_key, signal, lots, last_price, lots * last_price)
 
-            result = place_order(account_id, instrument_uid, direction, lots)
+            result = place_order(account_id, instrument_uid, direction, lots, last_price)
 
             log_trade_event("position_opened", {
                 "instrument": instrument,
