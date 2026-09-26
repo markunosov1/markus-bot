@@ -1992,14 +1992,7 @@ window.fetch = function(url, options) {
   } catch(e) { console.error('initData error:', e); }
   return _originalFetch(url, Object.assign({}, options, { headers: headers }));
 };
-function apiFetch(url, options) {
-  options = options || {};
-  const headers = Object.assign({}, options.headers || {});
-  try {
-    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
-      headers['Authorization'] = 'Bearer ' + btoa(window.Telegram.WebApp.initData);
-    }
-  } catch(e) { console.error('initData error:', e); }
+
   return fetch(url, Object.assign({}, options, { headers: headers }));
 }
 function signalClass(s){return s==='LONG'?'long':s==='SHORT'?'short':'none'}
