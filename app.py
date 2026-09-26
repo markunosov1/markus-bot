@@ -1543,136 +1543,48 @@ def ping():
 
 @app.route("/api/status")
 def api_status():
+    if not is_authorized(request):
+        return jsonify({"error": "Forbidden"}), 403
     try:
         return jsonify(collect_data())
-    except Exception as exc:
-        log.exception("Ошибка /api/status")
-        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/history")
 def api_history():
+    if not is_authorized(request):
+        return jsonify({"error": "Forbidden"}), 403
     history = load_history()
-    return jsonify({"count": len(history), "history": history})
 
 @app.route("/api/accounts")
 def api_accounts():
-    """Возвращает список счетов пользователя."""
+    if not is_authorized(request):
+        return jsonify({"ok": False, "error": "Forbidden"}), 403
     try:
-        accounts = get_accounts()
-        return jsonify({"ok": True, "accounts": accounts})
-    except Exception as exc:
-        log.exception("Ошибка /api/accounts")
-        return jsonify({"ok": False, "error": str(exc)}), 500
 @app.route("/api/trading_log")
 def api_trading_log():
+    if not is_authorized(request):
+        return jsonify({"ok": False, "error": "Forbidden"}), 403
     try:
-        entries = load_trading_log()
-        return jsonify({
-            "ok": True,
-            "count": len(entries),
-            "trading_enabled": TRADING_ENABLED,
-            "entries": entries[-50:],
-        })
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
 
 @app.route("/api/trading_config", methods=["GET", "POST"])
 def api_trading_config():
-    """GET — получить, POST — сохранить выбранные пары."""
+    if not is_authorized(request):
+        return jsonify({"ok": False, "error": "Forbidden"}), 403
     if request.method == "GET":
-        cfg = load_trading_config()
-        return jsonify({
-            "ok": True,
-            "account_id": cfg["account_id"],
-            "pairs": cfg["pairs"],
-            "trading_enabled": TRADING_ENABLED,
-        })
-    try:
-        data = request.get_json(force=True) or {}
-        account_id = str(data.get("account_id", "")).strip()
-        pairs = data.get("pairs", [])
-        if not isinstance(pairs, list):
-            return jsonify({"ok": False, "error": "pairs must be a list"}), 400
-
-        # Валидация каждой пары
-        clean_pairs = []
-        valid_strategy_keys = [s["key"] for s in STRATEGIES]
-        for p in pairs:
-            if not isinstance(p, dict):
-                continue
-            instrument = str(p.get("instrument", "")).strip()
-            strategy_key = str(p.get("strategy", "")).strip()
-            interval = str(p.get("interval", "")).strip()
-            if strategy_key not in valid_strategy_keys:
-                continue
-            if interval not in CANDLE_INTERVALS:
-                continue
-            if not instrument:
-                continue
-            clean_pairs.append({
-                "instrument": instrument,
-                "strategy": strategy_key,
-                "interval": interval,
-                "size_rub": float(p.get("size_rub", MAX_POSITION_SIZE_RUB)),
-                "use_sl": bool(p.get("use_sl", True)),
-                "use_tp": bool(p.get("use_tp", True)),
-            })
-
-        save_trading_config(account_id, clean_pairs)
-        return jsonify({"ok": True, "pairs": clean_pairs})
-    except Exception as exc:
-        log.exception("Ошибка /api/trading_config")
-        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/screening")
 def api_screening():
+    if not is_authorized(request):
+        return jsonify({"error": "Forbidden"}), 403
     try:
-        force = request.args.get("force", "").lower() in ("1", "true", "yes")
-        if force:
-            with _SCREENING_LOCK:
-                _SCREENING_CACHE["updated_at"] = None
-        data = get_screening_cached()
-        updated = _SCREENING_CACHE["updated_at"]
-        import json as _json
-        body = _json.dumps({
-            "updated_at": updated.isoformat() if updated else None,
-            **data,
-        }, ensure_ascii=False)
-        return app.response_class(
-            body,
-            mimetype="application/json; charset=utf-8"
-        )
-    except Exception as exc:
-        log.exception("Ошибка /api/screening")
-        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
+    if not is_authorized(request):
+        return jsonify({"ok": False, "error": "Forbidden"}), 403
     if request.method == "GET":
-        return jsonify(load_settings())
-    try:
-        data = request.get_json(force=True) or {}
-        current = load_settings()
-        for key in DEFAULT_SETTINGS:
-            if key in data:
-                current[key] = data[key]
-        if current.get("candle_interval") not in CANDLE_INTERVALS:
-            current["candle_interval"] = CANDLE_INTERVAL_DEFAULT
-        interval_now = current.get("candle_interval", CANDLE_INTERVAL_DEFAULT)
-        max_days = MAX_HISTORY_DAYS.get(interval_now, 60)
-        try:
-            days = int(current.get("history_days", 60))
-        except Exception:
-            days = 60
-        current["history_days"] = max(5, min(days, max_days))
-        save_settings(current)
-        return jsonify({"ok": True, "settings": current})
-    except Exception as exc:
-        log.exception("Ошибка сохранения настроек")
-        return jsonify({"ok": False, "error": str(exc)}), 500
 
 def _run_trading_check():
     """Проверяет сигналы и ОТПРАВЛЯЕТ реальные ордера."""
@@ -1977,6 +1889,16 @@ Exit rule: <b id="exitRule">---</b></div>
 
 <script>
 function money(v){return Number(v||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function apiFetch(url, options) {
+  options = options || {};
+  const headers = Object.assign({}, options.headers || {});
+  try {
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+      headers['Authorization'] = 'Bearer ' + btoa(window.Telegram.WebApp.initData);
+    }
+  } catch(e) { console.error('initData error:', e); }
+  return fetch(url, Object.assign({}, options, { headers: headers }));
+}
 function signalClass(s){return s==='LONG'?'long':s==='SHORT'?'short':'none'}
 
 const MAX_HISTORY_DAYS_JS = {"CANDLE_INTERVAL_5_MIN":7,"CANDLE_INTERVAL_15_MIN":14,"CANDLE_INTERVAL_HOUR":30,"CANDLE_INTERVAL_4_HOUR":90,"CANDLE_INTERVAL_DAY":365};
