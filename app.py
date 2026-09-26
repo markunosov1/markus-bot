@@ -34,6 +34,12 @@ FIND_INSTRUMENT_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.Instrum
 FUTURES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Futures"
 SHARES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.InstrumentsService/Shares"
 CANDLES_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles"
+ACCOUNTS_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.UsersService/GetAccounts"
+POST_ORDER_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.OrdersService/PostOrder"
+CANCEL_ORDER_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.OrdersService/CancelOrder"
+GET_ORDERS_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.OrdersService/GetOrders"
+GET_POSITIONS_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.OperationsService/GetPositions"
+GET_PORTFOLIO_URL = API_BASE + "/tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio"
 
 REQUEST_TIMEOUT = 30
 CANDLE_INTERVAL_DEFAULT = "CANDLE_INTERVAL_4_HOUR"
@@ -71,6 +77,16 @@ SELL_COMMISSION_PERCENT = 0.10
 TAX_PERCENT = 13.0
 HISTORY_FILE = "trade_history.json"
 SETTINGS_FILE = "settings.json"
+# ============================================================
+# КОНСТАНТЫ ТОРГОВЛИ
+# ============================================================
+TRADING_ENABLED = False            # ВНИМАНИЕ: True включает РЕАЛЬНУЮ торговлю
+MAX_POSITION_SIZE_RUB = 1000.0     # размер одной сделки в рублях
+MAX_DAILY_LOSS_RUB = 1000.0        # дневной лимит убытка
+MAX_OPEN_POSITIONS = 2             # максимум открытых позиций одновременно
+TRADE_LOG_FILE = "trade_log.json"  # лог реальных ордеров
+
+TRADING_INTERVAL_CHECK = 300       # как часто проверять сигналы (5 минут)
 
 MIN_BACKTEST_TRADES = 15
 MIN_WINRATE = 40.0
@@ -123,6 +139,7 @@ def get_db_connection():
 
 
 def init_db():
+    """Создаёт таблицы для настроек и конфига торговли."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -131,8 +148,16 @@ def init_db():
                     data JSONB NOT NULL
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS trading_config (
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    account_id TEXT,
+                    pairs JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
             conn.commit()
-    log.info("Таблица settings готова.")
+    log.info("Таблицы settings и trading_config готовы.")
 
 
 def get_token():
@@ -771,6 +796,67 @@ def save_settings(settings):
     except Exception as exc:
         log.error("Ошибка сохранения настроек в БД: %s", exc)
 
+============================================================
+# ТОРГОВЫЙ КОНФИГ (выбранные пары инструмент × стратегия)
+# ============================================================
+def load_trading_config():
+    """Загружает выбранные пары + accountId."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT account_id, pairs FROM trading_config WHERE id = 1;")
+                row = cur.fetchone()
+                if row:
+                    return {
+                        "account_id": row["account_id"] or "",
+                        "pairs": row["pairs"] or [],
+                    }
+                return {"account_id": "", "pairs": []}
+    except Exception as exc:
+        log.warning("Ошибка чтения trading_config: %s", exc)
+        return {"account_id": "", "pairs": []}
+
+
+def save_trading_config(account_id, pairs):
+    """Сохраняет выбранные пары + accountId."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO trading_config (id, account_id, pairs, updated_at)
+                    VALUES (1, %s, %s, NOW())
+                    ON CONFLICT (id) DO UPDATE
+                    SET account_id = EXCLUDED.account_id,
+                        pairs = EXCLUDED.pairs,
+                        updated_at = NOW();
+                    """,
+                    (account_id, json.dumps(pairs, ensure_ascii=False)),
+                )
+                conn.commit()
+    except Exception as exc:
+        log.error("Ошибка сохранения trading_config: %s", exc)
+
+
+def get_accounts():
+    """Запрашивает у Т-Банка список счетов пользователя."""
+    try:
+        data = api_post(ACCOUNTS_URL, {})
+        accounts = data.get("accounts", [])
+        result = []
+        for acc in accounts:
+            result.append({
+                "id": acc.get("id", ""),
+                "name": acc.get("name", ""),
+                "type": acc.get("type", ""),
+                "status": acc.get("status", ""),
+                "opened_date": acc.get("openedDate", ""),
+            })
+        return result
+    except Exception as exc:
+        log.warning("Ошибка get_accounts: %s", exc)
+        return []
+
 
 def load_history():
     if not os.path.exists(HISTORY_FILE):
@@ -1254,6 +1340,65 @@ def api_status():
 def api_history():
     history = load_history()
     return jsonify({"count": len(history), "history": history})
+
+@app.route("/api/accounts")
+def api_accounts():
+    """Возвращает список счетов пользователя."""
+    try:
+        accounts = get_accounts()
+        return jsonify({"ok": True, "accounts": accounts})
+    except Exception as exc:
+        log.exception("Ошибка /api/accounts")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/trading_config", methods=["GET", "POST"])
+def api_trading_config():
+    """GET — получить, POST — сохранить выбранные пары."""
+    if request.method == "GET":
+        cfg = load_trading_config()
+        return jsonify({
+            "ok": True,
+            "account_id": cfg["account_id"],
+            "pairs": cfg["pairs"],
+            "trading_enabled": TRADING_ENABLED,
+        })
+    try:
+        data = request.get_json(force=True) or {}
+        account_id = str(data.get("account_id", "")).strip()
+        pairs = data.get("pairs", [])
+        if not isinstance(pairs, list):
+            return jsonify({"ok": False, "error": "pairs must be a list"}), 400
+
+        # Валидация каждой пары
+        clean_pairs = []
+        valid_strategy_keys = [s["key"] for s in STRATEGIES]
+        for p in pairs:
+            if not isinstance(p, dict):
+                continue
+            instrument = str(p.get("instrument", "")).strip()
+            strategy_key = str(p.get("strategy", "")).strip()
+            interval = str(p.get("interval", "")).strip()
+            if strategy_key not in valid_strategy_keys:
+                continue
+            if interval not in CANDLE_INTERVALS:
+                continue
+            if not instrument:
+                continue
+            clean_pairs.append({
+                "instrument": instrument,
+                "strategy": strategy_key,
+                "interval": interval,
+                "size_rub": float(p.get("size_rub", MAX_POSITION_SIZE_RUB)),
+                "use_sl": bool(p.get("use_sl", True)),
+                "use_tp": bool(p.get("use_tp", True)),
+            })
+
+        save_trading_config(account_id, clean_pairs)
+        return jsonify({"ok": True, "pairs": clean_pairs})
+    except Exception as exc:
+        log.exception("Ошибка /api/trading_config")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/screening")
