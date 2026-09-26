@@ -1580,7 +1580,7 @@ details[open] summary::before{content:"[-] "}
 </div>
 
 <div style="margin-top:15px;font-size:13px;color:#aab3c2">
-<b>Selected pairs for trading</b> (instrument Ã strategy Ã timeframe):
+<b>Selected pairs for trading</b> (instrument, strategy, timeframe):
 </div>
 
 <div id="pairsList" style="margin-top:10px"></div>
