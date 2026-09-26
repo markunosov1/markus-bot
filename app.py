@@ -2160,10 +2160,11 @@ async function loadTradingConfig(){
     renderPairs();
     const st = document.getElementById('tradingStatus');
     if (data.trading_enabled) {
-      st.textContent = 'ENABLED (real trading)';
+      st.textContent = 'LIVE TRADING (реальная торговля)';
       st.style.color = '#ff6666';
+      st.style.fontWeight = 'bold';
     } else {
-      st.textContent = 'DISABLED (signals only)';
+      st.textContent = 'DISABLED (только сигналы)';
       st.style.color = '#52e58a';
     }
   } catch(e) {
