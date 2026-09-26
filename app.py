@@ -161,6 +161,70 @@ def init_db():
             conn.commit()
     log.info("Таблицы settings и trading_config готовы.")
 
+# ============================================================
+# ПРОВЕРКА ДОСТУПА ЧЕРЕЗ TELEGRAM
+# ============================================================
+import hashlib
+import hmac
+import base64
+from urllib.parse import parse_qsl
+
+
+def get_token_for_webapp():
+    return os.environ.get("TELEGRAM_BOT_TOKEN", "").strip() or None
+
+
+def verify_telegram_init_data(init_data):
+    if not init_data:
+        return None
+    bot_token = get_token_for_webapp()
+    if not bot_token:
+        log.warning("TELEGRAM_BOT_TOKEN не задан — защита не работает")
+        return None
+    try:
+        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = parsed.pop("hash", None)
+        if not received_hash:
+            return None
+        data_check_string = "\n".join(
+            "{}={}".format(k, v) for k, v in sorted(parsed.items())
+        )
+        secret_key = hmac.new(
+            b"WebAppData", bot_token.encode(), hashlib.sha256
+        ).digest()
+        calculated_hash = hmac.new(
+            secret_key, data_check_string.encode(), hashlib.sha256
+        ).hexdigest()
+        if calculated_hash != received_hash:
+            log.warning("initData: хеш не совпадает")
+            return None
+        user_json = parsed.get("user", "{}")
+        user = json.loads(user_json)
+        user_id = int(user.get("id", 0))
+        if ALLOWED_TELEGRAM_IDS and user_id not in ALLOWED_TELEGRAM_IDS:
+            log.warning("Отказано: user_id=%s не в белом списке", user_id)
+            return None
+        return user
+    except Exception as exc:
+        log.warning("verify_telegram_init_data error: %s", exc)
+        return None
+
+
+def is_authorized(req):
+    if not ALLOWED_TELEGRAM_IDS:
+        return True
+    auth = req.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        log.warning("is_authorized: нет заголовка Authorization")
+        return False
+    try:
+        encoded = auth[7:]
+        init_data = base64.b64decode(encoded).decode("utf-8")
+    except Exception:
+        log.warning("is_authorized: не удалось декодировать initData")
+        return False
+    user = verify_telegram_init_data(init_data)
+    return user is not None
 
 def get_token():
     for name in ("TINKOFF_TOKEN", "TINVEST_TOKEN", "T_BANK_TOKEN", "API_TOKEN", "TOKEN"):
