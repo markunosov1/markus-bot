@@ -1985,6 +1985,22 @@ Exit rule: <b id="exitRule">---</b></div>
 
 <script>
 function money(v){return Number(v||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}
+setTimeout(function(){
+  var info = '';
+  try {
+    info = 'Telegram: ' + (window.Telegram ? 'yes' : 'no');
+    info += ' | WebApp: ' + (window.Telegram && window.Telegram.WebApp ? 'yes' : 'no');
+    var d = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp.initData : '';
+    info += ' | initData length: ' + (d ? d.length : 0);
+    if (!d) {
+      info += ' | EMPTY!';
+    }
+  } catch(e) {
+    info = 'error: ' + e.message;
+  }
+  var el = document.getElementById('updated');
+  if (el) el.textContent = info;
+}, 1500);
 const _originalFetch = window.fetch.bind(window);
 window.fetch = function(url, options) {
   options = options || {};
