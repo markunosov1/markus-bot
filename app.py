@@ -2273,9 +2273,11 @@ async function loadScreening(){
 loadData();
 loadScreening();
 loadTradingConfig();
+loadTradingLog();
 setInterval(loadData,60000);
 setInterval(loadScreening,300000);
 setInterval(loadTradingConfig,60000);
+setInterval(loadTradingLog,60000);
 </script></body></html>
 """
 
