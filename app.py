@@ -1656,6 +1656,27 @@ def api_settings():
     if not is_authorized(request):
         return jsonify({"ok": False, "error": "Forbidden"}), 403
     if request.method == "GET":
+        return jsonify(load_settings())
+    try:
+        data = request.get_json(force=True) or {}
+        current = load_settings()
+        for key in DEFAULT_SETTINGS:
+            if key in data:
+                current[key] = data[key]
+        if current.get("candle_interval") not in CANDLE_INTERVALS:
+            current["candle_interval"] = CANDLE_INTERVAL_DEFAULT
+        interval_now = current.get("candle_interval", CANDLE_INTERVAL_DEFAULT)
+        max_days = MAX_HISTORY_DAYS.get(interval_now, 60)
+        try:
+            days = int(current.get("history_days", 60))
+        except Exception:
+            days = 60
+        current["history_days"] = max(5, min(days, max_days))
+        save_settings(current)
+        return jsonify({"ok": True, "settings": current})
+    except Exception as exc:
+        log.exception("Ошибка сохранения настроек")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 def _run_trading_check():
     """Проверяет сигналы и ОТПРАВЛЯЕТ реальные ордера."""
