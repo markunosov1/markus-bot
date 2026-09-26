@@ -80,11 +80,11 @@ SETTINGS_FILE = "settings.json"
 # ============================================================
 # КОНСТАНТЫ ТОРГОВЛИ
 # ============================================================
-TRADING_ENABLED = True             # ВНИМАНИЕ: True = РЕАЛЬНАЯ торговля
+TRADING_ENABLED = True
 ALLOWED_TELEGRAM_IDS = [1024945345]
-MAX_POSITION_SIZE_RUB = 1000.0     # размер одной сделки в рублях
-MAX_DAILY_LOSS_RUB = 1000.0        # дневной лимит убытка
-MAX_OPEN_POSITIONS = 2             # максимум открытых позиций
+MAX_POSITION_SIZE_RUB = 4800.0     # 100% депозита
+MAX_DAILY_LOSS_RUB = 1500.0        # увеличили лимит, чтобы не стоп сразу
+MAX_OPEN_POSITIONS = 1             # только 1 позиция одновременно
 TRADE_LOG_FILE = "trade_log.json"  # лог реальных сделок
 DRY_RUN = False                    # False = отправляем ордера реально
 
