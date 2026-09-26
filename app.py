@@ -1629,7 +1629,7 @@ def api_trading_config():
                 "instrument": instrument,
                 "strategy": strategy_key,
                 "interval": interval,
-                "size_rub": float(p.get("size_rub", MAX_POSITION_SIZE_RUB)),
+                "size_rub": float(p.get("size_rub", 0) or 0),
                 "use_sl": bool(p.get("use_sl", True)),
                 "use_tp": bool(p.get("use_tp", True)),
             })
@@ -1716,7 +1716,10 @@ def _run_trading_check():
             instrument = pair.get("instrument", "")
             strategy_key = pair.get("strategy", "")
             interval = pair.get("interval", "")
-            size_rub = float(pair.get("size_rub", MAX_POSITION_SIZE_RUB))
+            size_rub = float(pair.get("size_rub", 0) or 0)
+if size_rub <= 0:
+    log.info("Пропуск пары %s: размер не задан", pair.get("instrument", "?"))
+    continue
 
             if not instrument or not strategy_key or not interval:
                 continue
@@ -2233,7 +2236,7 @@ function renderPairs(){
     h += '</div>';
     h += '<div class="pair-row3">';
     h += '<div><div class="pair-label">Таймфрейм</div>' + makeSelect('pair_int_' + i, AVAILABLE_INTERVALS, p.interval, 'key', 'label') + '</div>';
-    h += '<div><div class="pair-label">Размер, ₽</div><input type="number" id="pair_size_' + i + '" value="' + (p.size_rub || 1000) + '" style="width:100%"></div>';
+    h += '<div><div class="pair-label">Размер, ₽</div><input type="number" id="pair_size_' + i + '" value="' + (p.size_rub || '') + '" placeholder="введите сумму" style="width:100%"></div>';
     h += '<div style="display:flex;align-items:flex-end"><button onclick="removePair(' + i + ')" style="background:#442020;color:#ff8585;padding:6px 12px">Удалить</button></div>';
     h += '</div>';
     h += '</div>';
@@ -2248,7 +2251,7 @@ function collectPairsFromUI(){
       instrument: document.getElementById('pair_inst_' + i).value,
       strategy: document.getElementById('pair_strat_' + i).value,
       interval: document.getElementById('pair_int_' + i).value,
-      size_rub: parseFloat(document.getElementById('pair_size_' + i).value) || 1000,
+      size_rub: parseFloat(document.getElementById('pair_size_' + i).value) || 0,
       use_sl: true,
       use_tp: true
     });
@@ -2262,7 +2265,7 @@ function addPair(){
     instrument: "SBER",
     strategy: "engulfing",
     interval: "CANDLE_INTERVAL_4_HOUR",
-    size_rub: 1000,
+    size_rub: null,
     use_sl: true,
     use_tp: true
   });
