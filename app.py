@@ -81,6 +81,7 @@ SETTINGS_FILE = "settings.json"
 # КОНСТАНТЫ ТОРГОВЛИ
 # ============================================================
 TRADING_ENABLED = True             # ВНИМАНИЕ: True = РЕАЛЬНАЯ торговля
+ALLOWED_TELEGRAM_IDS = [1024945345]
 MAX_POSITION_SIZE_RUB = 1000.0     # размер одной сделки в рублях
 MAX_DAILY_LOSS_RUB = 1000.0        # дневной лимит убытка
 MAX_OPEN_POSITIONS = 2             # максимум открытых позиций
