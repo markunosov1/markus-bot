@@ -1561,7 +1561,7 @@ def api_history():
 def api_accounts():
     if not is_authorized(request):
         return jsonify({"ok": False, "error": "Forbidden"}), 403
-    try:
+    
 @app.route("/api/trading_log")
 def api_trading_log():
     if not is_authorized(request):
