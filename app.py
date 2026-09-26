@@ -1548,6 +1548,8 @@ def api_status():
     try:
         return jsonify(collect_data())
     except Exception as exc:
+        log.exception("Ошибка /api/status")
+        return jsonify({"error": str(exc)}), 500
 
 @app.route("/api/history")
 def api_history():
