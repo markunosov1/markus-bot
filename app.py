@@ -1496,7 +1496,18 @@ def api_accounts():
     except Exception as exc:
         log.exception("Ошибка /api/accounts")
         return jsonify({"ok": False, "error": str(exc)}), 500
-
+@app.route("/api/trading_log")
+def api_trading_log():
+    try:
+        entries = load_trading_log()
+        return jsonify({
+            "ok": True,
+            "count": len(entries),
+            "trading_enabled": TRADING_ENABLED,
+            "entries": entries[-50:],
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 @app.route("/api/trading_config", methods=["GET", "POST"])
 def api_trading_config():
