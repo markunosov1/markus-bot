@@ -1717,9 +1717,9 @@ def _run_trading_check():
             strategy_key = pair.get("strategy", "")
             interval = pair.get("interval", "")
             size_rub = float(pair.get("size_rub", 0) or 0)
-if size_rub <= 0:
-    log.info("Пропуск пары %s: размер не задан", pair.get("instrument", "?"))
-    continue
+            if size_rub <= 0:
+                log.info("Пропуск пары %s: размер не задан", pair.get("instrument", "?"))
+                continue
 
             if not instrument or not strategy_key or not interval:
                 continue
