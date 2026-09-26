@@ -1595,6 +1595,96 @@ def api_settings():
         log.exception("Ошибка сохранения настроек")
         return jsonify({"ok": False, "error": str(exc)}), 500
 
+def _run_trading_check():
+    """Проверяет сигналы и ОТПРАВЛЯЕТ реальные ордера."""
+    if not TRADING_ENABLED:
+        return
+
+    config = load_trading_config()
+    pairs = config.get("pairs", [])
+    account_id = config.get("account_id", "")
+
+    if not pairs:
+        return
+    if not account_id:
+        log.warning("account_id пуст — торговля невозможна")
+        return
+    if check_daily_loss():
+        log.warning("Дневной лимит убытка — торговля остановлена до завтра")
+        return
+
+    for pair in pairs:
+        try:
+            instrument = pair.get("instrument", "")
+            strategy_key = pair.get("strategy", "")
+            interval = pair.get("interval", "")
+            size_rub = float(pair.get("size_rub", MAX_POSITION_SIZE_RUB))
+
+            if not instrument or not strategy_key or not interval:
+                continue
+
+            strategy_fn = None
+            for s in STRATEGIES:
+                if s["key"] == strategy_key:
+                    strategy_fn = s["fn"]
+                    break
+            if strategy_fn is None:
+                continue
+
+            instrument_uid = _resolve_instrument_uid(instrument)
+            if not instrument_uid:
+                continue
+
+            # ПРОВЕРКА: не открыта ли уже позиция по этой паре
+            if is_position_open(instrument_uid):
+                continue
+
+            # ПРОВЕРКА: не превышен ли лимит открытых позиций
+            if get_open_positions_count() >= MAX_OPEN_POSITIONS:
+                log.info("Лимит открытых позиций достигнут (%d)", MAX_OPEN_POSITIONS)
+                continue
+
+            temp_settings = dict(DEFAULT_SETTINGS)
+            temp_settings["candle_interval"] = interval
+            temp_settings["history_days"] = MAX_HISTORY_DAYS.get(interval, 60)
+
+            candles = normalize_candles(get_candles(instrument_uid, temp_settings))
+            if len(candles) < 40:
+                continue
+
+            analysis = strategy_fn(candles)
+            signal = analysis.get("signal", "Нет сигналов")
+            if signal not in ("LONG", "SHORT"):
+                continue
+
+            last_price = candles[-1]["close"]
+            lots = calculate_lots(last_price, size_rub)
+            if lots <= 0:
+                log.warning("Лотов = 0 для %s при цене %.2f и бюджете %.0f ₽",
+                            instrument, last_price, size_rub)
+                continue
+
+            direction = "BUY" if signal == "LONG" else "SELL"
+
+            log.info("ОТКРЫТИЕ | %s | %s | %s | %d лотов | %.2f ₽ | итог %.0f ₽",
+                     instrument, strategy_key, signal, lots, last_price, lots * last_price)
+
+            result = place_order(account_id, instrument_uid, direction, lots)
+
+            log_trade_event("position_opened", {
+                "instrument": instrument,
+                "instrument_uid": instrument_uid,
+                "strategy": strategy_key,
+                "interval": interval,
+                "signal": signal,
+                "lots": lots,
+                "price": last_price,
+                "size_rub": size_rub,
+                "order_result": result,
+            })
+
+        except Exception as exc:
+            log.exception("Ошибка торговли %s: %s", pair, exc)
 
 def background_monitor():
     first_run = True
