@@ -792,7 +792,7 @@ def save_settings(settings):
                     """,
                     (json.dumps(settings, ensure_ascii=False),),
                 )
-                conn.commit()
+                conn.commit() 
     except Exception as exc:
         log.error("Ошибка сохранения настроек в БД: %s", exc)
 
