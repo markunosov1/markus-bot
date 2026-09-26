@@ -80,7 +80,7 @@ SETTINGS_FILE = "settings.json"
 # ============================================================
 # КОНСТАНТЫ ТОРГОВЛИ
 # ============================================================
-TRADING_ENABLED = True
+TRADING_ENABLED = False.
 ALLOWED_TELEGRAM_IDS = [1024945345]
 MAX_POSITION_SIZE_RUB = 2500.0
 MAX_DAILY_LOSS_RUB = 1500.0
