@@ -1543,8 +1543,8 @@ table{width:100%;border-collapse:collapse;min-width:1000px}
 th,td{padding:11px;border-bottom:1px solid rgba(255,255,255,.07);text-align:left;font-size:13px}
 th{color:#9ca5b4;font-weight:normal}
 .settings{margin-top:20px;color:#858fa0;font-size:13px;line-height:1.7}
-button{margin-top:10px;margin-right:6px;border:none;border-radius:12px;padding:10px 16px;background:#d7aa52;color:#111;font-weight:bold;cursor:pointer}
-input[type=number],select{padding:6px;border-radius:6px;background:#0d1219;color:#fff;border:1px solid rgba(255,255,255,.15)}
+button{margin-top:10px;margin-right:6px;border:none;border-radius:12px;padding:10px 16px;background:#d7aa52;color:#111;font-weight:bold;cursor:pointer;font-size:13px}
+input[type=number],input[type=text],select{padding:6px;border-radius:6px;background:#0d1219;color:#fff;border:1px solid rgba(255,255,255,.15);font-size:13px}
 details summary{cursor:pointer;color:#d7aa52;font-weight:bold;margin-top:20px;padding:8px 0;list-style:none}
 details summary::-webkit-details-marker{display:none}
 details summary::before{content:"[+] ";font-size:12px}
@@ -1560,10 +1560,37 @@ details[open] summary::before{content:"[-] "}
 .screening-card-rej .sc-sub{font-size:12px;color:#8f99aa;margin-top:3px}
 .screening-card-rej .sc-meta{font-size:12px;color:#aab3c2;margin-top:6px}
 .screening-card-rej .sc-reason{font-size:12px;color:#ff8585;margin-top:6px}
+.pair-card{background:#0d1219;border-radius:12px;padding:14px;margin-bottom:10px;border-left:3px solid #d7aa52}
+.pair-card .pair-label{font-size:11px;color:#8f99aa;margin-bottom:4px}
+.pair-row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.pair-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
 @media(max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
 @media(max-width:700px){.grid{grid-template-columns:1fr}.stats-grid{grid-template-columns:repeat(2,1fr)}.header{align-items:flex-start;gap:10px;flex-direction:column}}
 </style></head><body><div class="container">
 <div class="header"><div class="logo">MARKUS <span>TRADE</span></div><div class="updated" id="updated">Loading...</div></div>
+
+<div class="card" id="tradingConfigCard">
+<h2>Trading Settings</h2>
+<div class="info">
+<b>Account ID:</b> <input type="text" id="accountIdInput" placeholder="e.g. 2141736260" style="width:180px">
+<button onclick="loadAccounts()" style="padding:6px 12px;font-size:12px">Find accounts</button>
+<div style="font-size:11px;color:#7a8394;margin-top:6px" id="accountsHint"></div>
+<br>
+<b>Trading status:</b> <span id="tradingStatus" style="font-weight:bold">LOADING...</span>
+</div>
+
+<div style="margin-top:15px;font-size:13px;color:#aab3c2">
+<b>Selected pairs for trading</b> (instrument Ã strategy Ã timeframe):
+</div>
+
+<div id="pairsList" style="margin-top:10px"></div>
+
+<div style="margin-top:15px">
+<button onclick="addPair()">+ Add pair</button>
+<button onclick="saveTradingConfig()">Save</button>
+<button onclick="loadTradingConfig()">Refresh</button>
+</div>
+</div>
 
 <div class="card" id="screeningCard">
 <h2>Auto Strategy Screening</h2>
@@ -1696,7 +1723,7 @@ function renderScreening(data){
   const rejectedCount=data.rejected_count||0;
   const updatedAt=data.updated_at?new Date(data.updated_at).toLocaleString('en-GB'):'--';
   if(passedCount===0){
-    info.innerHTML=`<b style="color:#ff6666">No strategy passed the filter</b><br>Checked ${rejectedCount} combinations (instrument x timeframe x strategy).<br>Criteria: >=15 trades, WR >=40%, net positive, P/DD >=1.0.<br><span style="color:#8f99aa;font-size:12px">Updated: ${updatedAt}</span>`;
+    info.innerHTML=`<b style="color:#ff6666">No strategy passed the filter</b><br>Checked ${rejectedCount} combinations.<br>Criteria: >=15 trades, WR >=40%, net positive, P/DD >=1.0.<br><span style="color:#8f99aa;font-size:12px">Updated: ${updatedAt}</span>`;
     passedEl.innerHTML='';
   }else{
     info.innerHTML=`<b style="color:#52e58a">Found working strategies: ${passedCount}</b> (rejected: ${rejectedCount})<br><span style="color:#8f99aa;font-size:12px">Updated: ${updatedAt}. Top-10 by P/DD:</span>`;
@@ -1738,6 +1765,174 @@ function renderScreening(data){
     rejectedEl.innerHTML='No data.';
   }
 }
+
+// ============================================================
+// TRADING CONFIG
+// ============================================================
+const AVAILABLE_INSTRUMENTS = [
+  {id: "SBER", title: "Ð¡Ð±ÐµÑÐ±Ð°Ð½Ðº"},
+  {id: "ROSN", title: "Ð Ð¾ÑÐ½ÐµÑÑÑ"},
+  {id: "GMKN", title: "ÐÐ¾ÑÐ½Ð¸ÐºÐµÐ»Ñ"},
+  {id: "CR",   title: "Ð®Ð°Ð½Ñ"},
+  {id: "GD",   title: "ÐÐ¾Ð»Ð¾ÑÐ¾"},
+  {id: "BR",   title: "ÐÐµÑÑÑ Brent"}
+];
+const AVAILABLE_STRATEGIES = [
+  {key: "user",       name: "Ð¢Ð²Ð¾Ñ ÑÑÑÐ°ÑÐµÐ³Ð¸Ñ"},
+  {key: "ema",        name: "EMA Trend"},
+  {key: "breakout",   name: "Breakout"},
+  {key: "rsi",        name: "RSI Reversal"},
+  {key: "macd",       name: "MACD"},
+  {key: "bollinger",  name: "Bollinger"},
+  {key: "hammer",     name: "Hammer"},
+  {key: "engulfing",  name: "Engulfing"},
+  {key: "double",     name: "Double Top/Bottom"},
+  {key: "supertrend", name: "SuperTrend"}
+];
+const AVAILABLE_INTERVALS = [
+  {key: "CANDLE_INTERVAL_HOUR",   label: "1 ÑÐ°Ñ"},
+  {key: "CANDLE_INTERVAL_4_HOUR", label: "4 ÑÐ°ÑÐ°"},
+  {key: "CANDLE_INTERVAL_DAY",    label: "1 Ð´ÐµÐ½Ñ"}
+];
+let CURRENT_PAIRS = [];
+
+async function loadAccounts(){
+  const hint = document.getElementById('accountsHint');
+  hint.textContent = 'ÐÐ°Ð³ÑÑÐ·ÐºÐ°...';
+  try {
+    const r = await fetch('/api/accounts');
+    const data = await r.json();
+    if (!data.ok) {
+      hint.innerHTML = '<span style="color:#ff6666">ÐÑÐ¸Ð±ÐºÐ°: ' + (data.error || 'Ð½ÐµÑ Ð´Ð°Ð½Ð½ÑÑ') + '</span>';
+      return;
+    }
+    if (!data.accounts || !data.accounts.length) {
+      hint.innerHTML = '<span style="color:#ff6666">Ð¡ÑÐµÑÐ° Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ñ</span>';
+      return;
+    }
+    hint.innerHTML = 'ÐÐ°Ð¹Ð´ÐµÐ½Ð¾: ' + data.accounts.map(a =>
+      '<b>' + a.id + '</b> (' + (a.status || '') + ')'
+    ).join(', ');
+    if (!document.getElementById('accountIdInput').value && data.accounts[0]) {
+      document.getElementById('accountIdInput').value = data.accounts[0].id;
+    }
+  } catch(e) {
+    hint.innerHTML = '<span style="color:#ff6666">ÐÑÐ¸Ð±ÐºÐ°: ' + e.message + '</span>';
+  }
+}
+
+function makeSelect(id, options, currentValue, valueField, labelField) {
+  let html = '<select id="' + id + '" style="padding:6px;border-radius:6px;background:#0d1219;color:#fff;border:1px solid rgba(255,255,255,.15);width:100%">';
+  options.forEach(o => {
+    const v = o[valueField];
+    const lbl = o[labelField] || v;
+    const sel = (v === currentValue) ? ' selected' : '';
+    html += '<option value="' + v + '"' + sel + '>' + lbl + '</option>';
+  });
+  html += '</select>';
+  return html;
+}
+
+function renderPairs(){
+  const el = document.getElementById('pairsList');
+  if (!CURRENT_PAIRS.length) {
+    el.innerHTML = '<div style="color:#8f99aa;font-size:13px;padding:10px">ÐÐ¾ÐºÐ° Ð½Ðµ Ð²ÑÐ±ÑÐ°Ð½Ð¾ Ð½Ð¸ Ð¾Ð´Ð½Ð¾Ð¹ Ð¿Ð°ÑÑ. ÐÐ°Ð¶Ð¼Ð¸ÑÐµ Â«+ Add pairÂ».</div>';
+    return;
+  }
+  let h = '';
+  CURRENT_PAIRS.forEach((p, i) => {
+    h += '<div class="pair-card">';
+    h += '<div class="pair-row2">';
+    h += '<div><div class="pair-label">ÐÐ½ÑÑÑÑÐ¼ÐµÐ½Ñ</div>' + makeSelect('pair_inst_' + i, AVAILABLE_INSTRUMENTS, p.instrument, 'id', 'title') + '</div>';
+    h += '<div><div class="pair-label">Ð¡ÑÑÐ°ÑÐµÐ³Ð¸Ñ</div>' + makeSelect('pair_strat_' + i, AVAILABLE_STRATEGIES, p.strategy, 'key', 'name') + '</div>';
+    h += '</div>';
+    h += '<div class="pair-row3">';
+    h += '<div><div class="pair-label">Ð¢Ð°Ð¹Ð¼ÑÑÐµÐ¹Ð¼</div>' + makeSelect('pair_int_' + i, AVAILABLE_INTERVALS, p.interval, 'key', 'label') + '</div>';
+    h += '<div><div class="pair-label">Ð Ð°Ð·Ð¼ÐµÑ, â½</div><input type="number" id="pair_size_' + i + '" value="' + (p.size_rub || 1000) + '" style="width:100%"></div>';
+    h += '<div style="display:flex;align-items:flex-end"><button onclick="removePair(' + i + ')" style="background:#442020;color:#ff8585;padding:6px 12px">Ð£Ð´Ð°Ð»Ð¸ÑÑ</button></div>';
+    h += '</div>';
+    h += '</div>';
+  });
+  el.innerHTML = h;
+}
+
+function collectPairsFromUI(){
+  const result = [];
+  CURRENT_PAIRS.forEach((p, i) => {
+    result.push({
+      instrument: document.getElementById('pair_inst_' + i).value,
+      strategy: document.getElementById('pair_strat_' + i).value,
+      interval: document.getElementById('pair_int_' + i).value,
+      size_rub: parseFloat(document.getElementById('pair_size_' + i).value) || 1000,
+      use_sl: true,
+      use_tp: true
+    });
+  });
+  return result;
+}
+
+function addPair(){
+  CURRENT_PAIRS = collectPairsFromUI();
+  CURRENT_PAIRS.push({
+    instrument: "SBER",
+    strategy: "engulfing",
+    interval: "CANDLE_INTERVAL_4_HOUR",
+    size_rub: 1000,
+    use_sl: true,
+    use_tp: true
+  });
+  renderPairs();
+}
+
+function removePair(index){
+  CURRENT_PAIRS = collectPairsFromUI();
+  CURRENT_PAIRS.splice(index, 1);
+  renderPairs();
+}
+
+async function loadTradingConfig(){
+  try {
+    const r = await fetch('/api/trading_config');
+    const data = await r.json();
+    if (!data.ok) {
+      console.error('Trading config error:', data.error);
+      return;
+    }
+    document.getElementById('accountIdInput').value = data.account_id || '';
+    CURRENT_PAIRS = data.pairs || [];
+    renderPairs();
+    const st = document.getElementById('tradingStatus');
+    if (data.trading_enabled) {
+      st.textContent = 'ENABLED (real trading)';
+      st.style.color = '#ff6666';
+    } else {
+      st.textContent = 'DISABLED (signals only)';
+      st.style.color = '#52e58a';
+    }
+  } catch(e) {
+    console.error('loadTradingConfig error:', e);
+  }
+}
+
+async function saveTradingConfig(){
+  const payload = {
+    account_id: document.getElementById('accountIdInput').value.trim(),
+    pairs: collectPairsFromUI()
+  };
+  const r = await fetch('/api/trading_config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const res = await r.json();
+  if (res.ok) {
+    alert('Ð¡Ð¾ÑÑÐ°Ð½ÐµÐ½Ð¾: ' + res.pairs.length + ' Ð¿Ð°Ñ');
+    await loadTradingConfig();
+  } else {
+    alert('ÐÑÐ¸Ð±ÐºÐ°: ' + res.error);
+  }
+}
+
 async function saveRiskSettings(){
   const payload={
     candle_interval:document.getElementById('intervalSelect').value,
@@ -1751,7 +1946,7 @@ async function saveRiskSettings(){
   };
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const res=await r.json();
-  if(res.ok){alert('Settings saved. Recalculating...');loadData();}
+  if(res.ok){alert('Settings saved.');loadData();}
   else{alert('Error: '+res.error);}
 }
 async function loadData(){
@@ -1781,8 +1976,10 @@ async function loadScreening(){
 }
 loadData();
 loadScreening();
+loadTradingConfig();
 setInterval(loadData,60000);
 setInterval(loadScreening,300000);
+setInterval(loadTradingConfig,60000);
 </script></body></html>
 """
 
