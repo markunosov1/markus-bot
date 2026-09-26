@@ -1567,6 +1567,16 @@ def api_trading_log():
     if not is_authorized(request):
         return jsonify({"ok": False, "error": "Forbidden"}), 403
     try:
+        entries = load_trading_log()
+        return jsonify({
+            "ok": True,
+            "count": len(entries),
+            "trading_enabled": TRADING_ENABLED,
+            "entries": entries[-50:],
+        })
+    except Exception as exc:
+        log.exception("Ошибка /api/trading_log")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 @app.route("/api/trading_config", methods=["GET", "POST"])
 def api_trading_config():
