@@ -1830,6 +1830,10 @@ details[open] summary::before{content:"[-] "}
 <div style="font-size:11px;color:#7a8394;margin-top:6px" id="accountsHint"></div>
 <br>
 <b>Trading status:</b> <span id="tradingStatus" style="font-weight:bold">LOADING...</span>
+<div style="margin-top:8px;padding:8px;border-radius:8px;background:#442020;color:#ff8585;font-size:12px">
+⚠️ РЕАЛЬНАЯ ТОРГОВЛЯ ВКЛЮЧЕНА. Робот будет отправлять ордера от вашего имени.<br>
+Дневной лимит убытка: 1000 ₽. Максимум позиций: 2.
+</div>
 </div>
 
 <div style="margin-top:15px;font-size:13px;color:#aab3c2">
